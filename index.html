@@ -291,9 +291,11 @@ function auditCards(allCards, excluded) {
     const created = ms(c.createdDateTime);
     const issues = [];
     const o = c.originalEntry;
-    const creator = c.createdBy?.user, modifier = c.lastModifiedBy?.user;
-    const hrCreated = !!(creator?.id && creator.id !== c.userId);
-    const hrModified = !!(modifier?.id && modifier.id !== c.userId);
+    // Shifts leaves createdBy/lastModifiedBy empty, so HR corrections are recognised by the note the HR panel stamps.
+    const hrNote = [c.notes?.content, c.clockInEvent?.notes?.content].find(t => /^HR correction by /.test(t || ""));
+    const hrCreated = !!hrNote, hrModified = !!hrNote;
+    const hrWho = hrNote ? hrNote.replace(/^HR correction by /, "").split(":")[0] : null;
+    const hrReason = hrNote ? hrNote.split(":").slice(1).join(":").trim() : "";
     const firstIn = ms(o?.clockInEvent?.dateTime) || inT;   // clock-in as first recorded
     // Entry for a different day than the day it was created, or in the future
     if (created && firstIn && dubaiDateKey(new Date(created)) !== dubaiDateKey(new Date(firstIn)))
@@ -319,11 +321,10 @@ function auditCards(allCards, excluded) {
           issues.push({ kind: "Edited", detail: `Break ${fmtTime(new Date(ms(ob1.start?.dateTime)))}–${ob1.end?.dateTime ? fmtTime(new Date(ms(ob1.end.dateTime))) : "…"} → ${fmtTime(new Date(ms(b.start?.dateTime)))}–${b.end?.dateTime ? fmtTime(new Date(ms(b.end.dateTime))) : "…"}` });
       }
     }
-    const reason = c.clockInEvent?.notes?.content || c.notes?.content || "";
     for (const i of issues) {
       const hr = i.kind === "Edited" ? hrModified : hrCreated;
       i.by = hr ? "hr" : "self";
-      if (hr) { const who = (i.kind === "Edited" ? modifier : creator)?.displayName || "HR"; i.detail += ` · by ${who}${reason ? ` – “${reason}”` : ""}`; }
+      if (hr) i.detail += ` · by ${hrWho || "HR"}${hrReason ? ` – “${hrReason}”` : ""}`;
     }
     if (issues.length) out.push({ name, day: inT, changed: ms(c.lastModifiedDateTime) || created, issues });
   }
