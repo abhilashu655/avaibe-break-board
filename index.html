@@ -43,6 +43,9 @@
   .center{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;gap:12px;text-align:center}
   .err{background:var(--red-bg);color:var(--red);padding:10px 14px;border-radius:8px;margin-bottom:12px;white-space:pre-wrap}
   .legend{margin-top:12px;color:var(--muted);font-size:12px}
+  h2.sec{font-size:15px;margin:28px 0 8px}
+  .tile.ok{color:var(--green);font-weight:600}
+  td{white-space:normal}
   @media (max-width:800px){.tiles{grid-template-columns:repeat(2,1fr)} th:nth-child(5),td:nth-child(5){display:none}}
 </style>
 </head>
@@ -76,7 +79,9 @@ const CONFIG = {
   breakLimitMin: 60,       // daily break allowance
   lateGraceMin: 15,        // flag as late if not clocked in this long after shift start
   refreshSec: 30,
-  excludeUserEmails: ["abhilash@avaibe.com", "director@avaibe.com"] // not tracked
+  auditDays: 30,           // how far back to check for edited / off-day entries
+  manualGapMin: 15,        // entry created this long after its clock-in time = added by hand
+  excludeUserEmails: ["abhilash@avaibe.com", "director@avaibe.com", "sujit@avaibe.com"] // managers, not tracked
 };
 const SCOPES = ["Schedule.Read.All", "User.ReadBasic.All"];
 const GRAPH = "https://graph.microsoft.com/v1.0";
@@ -164,15 +169,21 @@ async function loadData() {
   const dayStart = dubaiMidnightUtc();
   const dayEnd = new Date(dayStart.getTime() + 24*3600*1000);
 
-  // Today's time cards (try server-side filter, fall back to client-side)
-  let cards;
+  // Time cards for the audit window (try server-side filter, fall back to client-side)
+  const auditStart = new Date(dayStart.getTime() - CONFIG.auditDays*24*3600*1000);
+  let allCards;
   try {
-    cards = await graphAll(`/teams/${CONFIG.teamId}/schedule/timeCards?$filter=clockInEvent/dateTime ge ${dayStart.toISOString()}&$top=200`, token);
+    allCards = await graphAll(`/teams/${CONFIG.teamId}/schedule/timeCards?$filter=clockInEvent/dateTime ge ${auditStart.toISOString()}&$top=200`, token);
   } catch (e) {
     if (e.status !== 400) throw e;
-    cards = (await graphAll(`/teams/${CONFIG.teamId}/schedule/timeCards?$top=200`, token, 100))
-      .filter(c => c.clockInEvent && new Date(c.clockInEvent.dateTime) >= dayStart);
+    allCards = (await graphAll(`/teams/${CONFIG.teamId}/schedule/timeCards?$top=200`, token, 100))
+      .filter(c => c.clockInEvent && new Date(c.clockInEvent.dateTime) >= auditStart);
   }
+  allCards = allCards.filter(c => c.clockInEvent?.dateTime);
+  const cards = allCards.filter(c => {
+    const t = new Date(c.clockInEvent.dateTime);
+    return t >= dayStart && t < dayEnd;
+  });
 
   // Today's shifts (roster)
   let shifts = [];
@@ -182,7 +193,8 @@ async function loadData() {
 
   // Team members via schedule owners/members: collect all user ids we know
   const ids = new Set([...cards.map(c => c.userId), ...shifts.map(s => s.userId)].filter(Boolean));
-  const missing = [...ids].filter(id => !state.users[id]);
+  const allIds = new Set([...ids, ...allCards.map(c => c.userId)].filter(Boolean));
+  const missing = [...allIds].filter(id => !state.users[id]);
   for (let i = 0; i < missing.length; i += 15) {
     const chunk = missing.slice(i, i+15).map(id => `'${id}'`).join(",");
     try {
@@ -228,8 +240,54 @@ async function loadData() {
     });
   }
   state.rows = rows;
+  state.audit = auditCards(allCards, excluded);
   state.fetchedAt = new Date();
 }
+
+/* ===== AUDIT: edited / back-dated / future-dated entries ===== */
+const ms = x => x ? new Date(x).getTime() : null;
+const differs = (a, b) => a != null && b != null && Math.abs(a - b) > 60000; // > 1 min
+function auditCards(allCards, excluded) {
+  const now = Date.now(), out = [];
+  for (const c of allCards) {
+    const info = state.users[c.userId] || {};
+    const email = (info.mail || info.userPrincipalName || "").toLowerCase();
+    if (excluded.has(email)) continue;
+    const name = info.displayName || info.mail || (c.userId || "").slice(0,8);
+    const inT = ms(c.clockInEvent?.dateTime), outT = ms(c.clockOutEvent?.dateTime);
+    const created = ms(c.createdDateTime);
+    const issues = [];
+    const o = c.originalEntry;
+    const firstIn = ms(o?.clockInEvent?.dateTime) || inT;   // clock-in as first recorded
+    // Entry for a different day than the day it was created, or in the future
+    if (created && firstIn && dubaiDateKey(new Date(created)) !== dubaiDateKey(new Date(firstIn)))
+      issues.push({ kind: firstIn < created ? "Back-dated" : "Future-dated",
+        detail: `Entry for ${fmtDay(firstIn)} was created on ${fmtDay(created)} ${fmtTime(new Date(created))}` });
+    else if (inT > now + 5*60000)
+      issues.push({ kind: "Future-dated", detail: `Clock-in set to ${fmtDay(inT)} ${fmtTime(new Date(inT))}` });
+    // Added by hand (created long after the clock-in it claims)
+    else if (created && firstIn && created - firstIn > CONFIG.manualGapMin*60000)
+      issues.push({ kind: "Added manually", detail: `Clock-in ${fmtTime(new Date(firstIn))} entered at ${fmtTime(new Date(created))}` });
+    // Edited after the fact (compare with original entry)
+    if (o) {
+      const oIn = ms(o.clockInEvent?.dateTime), oOut = ms(o.clockOutEvent?.dateTime);
+      if (differs(inT, oIn)) issues.push({ kind: "Edited", detail: `Clock-in ${fmtTime(new Date(oIn))} → ${fmtTime(new Date(inT))}` });
+      if (differs(outT, oOut)) issues.push({ kind: "Edited", detail: `Clock-out ${fmtTime(new Date(oOut))} → ${fmtTime(new Date(outT))}` });
+      const nb = c.breaks || [], ob = o.breaks || [];
+      if (c.state === "clockedOut" && o.breaks && nb.length !== ob.length)
+        issues.push({ kind: "Edited", detail: `Breaks ${ob.length} → ${nb.length}` });
+      const obById = Object.fromEntries(ob.map(b => [b.breakId, b]));
+      for (const b of nb) {
+        const ob1 = obById[b.breakId]; if (!ob1) continue;
+        if (differs(ms(b.start?.dateTime), ms(ob1.start?.dateTime)) || differs(ms(b.end?.dateTime), ms(ob1.end?.dateTime)))
+          issues.push({ kind: "Edited", detail: `Break ${fmtTime(new Date(ms(ob1.start?.dateTime)))}–${ob1.end?.dateTime ? fmtTime(new Date(ms(ob1.end.dateTime))) : "…"} → ${fmtTime(new Date(ms(b.start?.dateTime)))}–${b.end?.dateTime ? fmtTime(new Date(ms(b.end.dateTime))) : "…"}` });
+      }
+    }
+    if (issues.length) out.push({ name, day: inT, changed: ms(c.lastModifiedDateTime) || created, issues });
+  }
+  return out.sort((a, b) => (b.changed||0) - (a.changed||0));
+}
+const fmtDay = t => new Intl.DateTimeFormat("en-GB",{timeZone:CONFIG.timeZone,weekday:"short",day:"2-digit",month:"short"}).format(new Date(t));
 
 /* ===== RENDER ===== */
 const ORDER = { over:0, late:1, break:2, working:3, notin:4, done:5 };
@@ -278,7 +336,20 @@ function render() {
         </tr>`).join("") : `<tr><td colspan="7" class="muted">No shifts or clock-ins today.</td></tr>`}
       </tbody>
     </table>
-    <div class="legend">Refreshes every ${CONFIG.refreshSec}s · timers tick live · "Late" = not clocked in ${CONFIG.lateGraceMin} min after shift start · break limit ${CONFIG.breakLimitMin} min/day (paid)</div>`;
+    <div class="legend">Refreshes every ${CONFIG.refreshSec}s · timers tick live · "Late" = not clocked in ${CONFIG.lateGraceMin} min after shift start · break limit ${CONFIG.breakLimitMin} min/day (paid)</div>
+    <h2 class="sec">Irregular entries <span class="muted">· last ${CONFIG.auditDays} days</span></h2>
+    <p class="sub" style="margin:-6px 0 10px">Time sheet edits, back-dated or future-dated entries, and clock-ins added by hand. Staff are only allowed to clock in live, for today.</p>
+    ${(state.audit||[]).length ? `<table>
+      <thead><tr><th>Staff</th><th>Shift day</th><th>Issue</th><th>Details</th><th>Last changed</th></tr></thead>
+      <tbody>${state.audit.map(a => a.issues.map((i, n) => `
+        <tr>
+          <td>${n ? "" : esc(a.name)}</td>
+          <td class="num">${n ? "" : fmtDay(a.day)}</td>
+          <td><span class="pill ${i.kind==="Edited" ? "break" : "over"}">${i.kind}</span></td>
+          <td>${esc(i.detail)}</td>
+          <td class="num">${n || !a.changed ? "" : fmtDay(a.changed) + " " + fmtTime(new Date(a.changed))}</td>
+        </tr>`).join("")).join("")}</tbody></table>`
+      : `<div class="tile ok">✓ No edited, back-dated or future-dated entries.</div>`}`;
   app.querySelectorAll("th[data-k]").forEach(th => th.onclick = () => { state.sortKey = th.dataset.k; render(); });
   document.getElementById("updated").textContent = state.fetchedAt ? "Updated " + fmtTime(state.fetchedAt) : "";
 }
