@@ -73,7 +73,7 @@
       <h1>Avaibe – Attendance Board</h1>
       <div class="sub" id="sub">Shifts time clock · Dubai time</div>
     </div>
-    <nav class="tabs" id="tabs" hidden><a href="#live" id="tabLive">Live</a><a href="#analytics" id="tabAn">Analytics</a></nav>
+    <nav class="tabs" id="tabs" hidden><a href="#live" id="tabLive">Live</a><a href="#analytics" id="tabAn">Analytics</a><a href="#hr" id="tabHr" hidden>HR corrections</a></nav>
   </div>
   <div class="right">
     <span class="sub" id="updated"></span>
@@ -89,6 +89,7 @@
   </div>
 </main>
 <main id="an" hidden></main>
+<main id="hr" hidden></main>
 
 <script>
 /* ===== CONFIG ===== */
@@ -102,9 +103,11 @@ const CONFIG = {
   refreshSec: 30,
   auditDays: 30,           // how far back to check for edited / off-day entries
   manualGapMin: 15,        // entry created this long after its clock-in time = added by hand
-  excludeUserEmails: ["abhilash@avaibe.com", "director@avaibe.com", "sujit@avaibe.com"] // managers, not tracked
+  excludeUserEmails: ["abhilash@avaibe.com", "director@avaibe.com", "sujit@avaibe.com"], // managers, not tracked
+  hrEmails: ["sujit@avaibe.com", "abhilash@avaibe.com", "director@avaibe.com"]          // can enter corrections
 };
 const SCOPES = ["Schedule.Read.All", "User.ReadBasic.All"];
+const WRITE_SCOPES = ["Schedule.ReadWrite.All"];
 const GRAPH = "https://graph.microsoft.com/v1.0";
 
 /* ===== AUTH ===== */
@@ -121,16 +124,16 @@ const pca = new msalLib.PublicClientApplication({
   cache: { cacheLocation: "localStorage" }
 });
 
-async function getToken() {
+async function getToken(scopes = SCOPES) {
   const account = pca.getActiveAccount() || pca.getAllAccounts()[0];
   if (!account) throw new Error("not-signed-in");
   pca.setActiveAccount(account);
   try {
-    return (await pca.acquireTokenSilent({ scopes: SCOPES, account })).accessToken;
+    return (await pca.acquireTokenSilent({ scopes, account })).accessToken;
   } catch (e) {
     if (e instanceof msalLib.InteractionRequiredAuthError) {
-      if (inIframe) return (await pca.acquireTokenPopup({ scopes: SCOPES })).accessToken;
-      await pca.acquireTokenRedirect({ scopes: SCOPES });
+      try { return (await pca.acquireTokenPopup({ scopes, account })).accessToken; }
+      catch (e2) { if (!inIframe) await pca.acquireTokenRedirect({ scopes, account }); throw e2; }
     }
     throw e;
   }
@@ -156,6 +159,15 @@ async function graph(path, token) {
     const err = new Error(msg); err.status = res.status; throw err;
   }
   return res.json();
+}
+async function graphSend(method, path, body, token) {
+  const res = await fetch(GRAPH + path, { method, headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  if (!res.ok) {
+    let msg = res.status + " " + res.statusText;
+    try { const j = await res.json(); msg += " – " + (j.error?.message || ""); } catch {}
+    const err = new Error(msg); err.status = res.status; throw err;
+  }
+  return res.status === 204 ? null : res.json().catch(() => null);
 }
 async function graphAll(path, token, maxPages = 50) {
   let out = [], next = path, pages = 0;
@@ -279,6 +291,9 @@ function auditCards(allCards, excluded) {
     const created = ms(c.createdDateTime);
     const issues = [];
     const o = c.originalEntry;
+    const creator = c.createdBy?.user, modifier = c.lastModifiedBy?.user;
+    const hrCreated = !!(creator?.id && creator.id !== c.userId);
+    const hrModified = !!(modifier?.id && modifier.id !== c.userId);
     const firstIn = ms(o?.clockInEvent?.dateTime) || inT;   // clock-in as first recorded
     // Entry for a different day than the day it was created, or in the future
     if (created && firstIn && dubaiDateKey(new Date(created)) !== dubaiDateKey(new Date(firstIn)))
@@ -303,6 +318,12 @@ function auditCards(allCards, excluded) {
         if (differs(ms(b.start?.dateTime), ms(ob1.start?.dateTime)) || differs(ms(b.end?.dateTime), ms(ob1.end?.dateTime)))
           issues.push({ kind: "Edited", detail: `Break ${fmtTime(new Date(ms(ob1.start?.dateTime)))}–${ob1.end?.dateTime ? fmtTime(new Date(ms(ob1.end.dateTime))) : "…"} → ${fmtTime(new Date(ms(b.start?.dateTime)))}–${b.end?.dateTime ? fmtTime(new Date(ms(b.end.dateTime))) : "…"}` });
       }
+    }
+    const reason = c.clockInEvent?.notes?.content || c.notes?.content || "";
+    for (const i of issues) {
+      const hr = i.kind === "Edited" ? hrModified : hrCreated;
+      i.by = hr ? "hr" : "self";
+      if (hr) { const who = (i.kind === "Edited" ? modifier : creator)?.displayName || "HR"; i.detail += ` · by ${who}${reason ? ` – “${reason}”` : ""}`; }
     }
     if (issues.length) out.push({ name, day: inT, changed: ms(c.lastModifiedDateTime) || created, issues });
   }
@@ -359,14 +380,14 @@ function render() {
     </table>
     <div class="legend">Refreshes every ${CONFIG.refreshSec}s · timers tick live · "Late" = not clocked in ${CONFIG.lateGraceMin} min after shift start · break limit ${CONFIG.breakLimitMin} min/day (paid)</div>
     <h2 class="sec">Irregular entries <span class="muted">· last ${CONFIG.auditDays} days</span></h2>
-    <p class="sub" style="margin:-6px 0 10px">Time sheet edits, back-dated or future-dated entries, and clock-ins added by hand. Staff are only allowed to clock in live, for today.</p>
+    <p class="sub" style="margin:-6px 0 10px"><b>Self:</b> staff changed their own time sheet (not allowed – they must request HR). <b>HR correction:</b> entered by HR from an approved Missed clock-in request.</p>
     ${(state.audit||[]).length ? `<table>
       <thead><tr><th>Staff</th><th>Shift day</th><th>Issue</th><th>Details</th><th>Last changed</th></tr></thead>
       <tbody>${state.audit.map(a => a.issues.map((i, n) => `
         <tr>
           <td>${n ? "" : esc(a.name)}</td>
           <td class="num">${n ? "" : fmtDay(a.day)}</td>
-          <td><span class="pill ${i.kind==="Edited" ? "break" : "over"}">${i.kind}</span></td>
+          <td><span class="pill ${i.by==="hr" ? "done" : i.kind==="Edited" ? "break" : "over"}">${i.by==="hr" ? "HR correction" : "Self: " + i.kind}</span></td>
           <td>${esc(i.detail)}</td>
           <td class="num">${n || !a.changed ? "" : fmtDay(a.changed) + " " + fmtTime(new Date(a.changed))}</td>
         </tr>`).join("")).join("")}</tbody></table>`
@@ -492,7 +513,7 @@ function computeAnalytics(cards, shifts, fromKey, toKey, nowMs = Date.now()) {
       const noOut = open && k < todayKey;
       const absent = !!(s && !cs.length && (k < todayKey || nowMs > s.end));
       const over = brk > limit;
-      const irr = cs.length ? auditCards(cs, excludedSet).reduce((t, a) => t + a.issues.length, 0) : 0;
+      const irr = cs.length ? auditCards(cs, excludedSet).reduce((t, a) => t + a.issues.filter(i => i.by === "self").length, 0) : 0;
       if (elapsed) e.sched++;
       if (s && cs.length) e.present++;
       if (!s && cs.length) e.extra++;
@@ -545,7 +566,7 @@ function renderAnalytics() {
   const rangeTxt = an.from && an.to ? `${fmtKey(an.from,{weekday:"short",day:"2-digit",month:"short"})} – ${fmtKey(an.to,{weekday:"short",day:"2-digit",month:"short"})} ${an.to.slice(0,4)}` : "";
   const cols = [
     ["name","Staff"],["attendance","Attendance"],["punctuality","On time"],["late","Late"],["absent","Absent"],["avgIn","Avg clock-in"],
-    ["avgWorked","Avg on clock/day"],["avgBrk","Avg break/day"],["overBreak","Over-break days"],["early","Left early"],["noOut","No clock-out"],["irregular","Irregular"]];
+    ["avgWorked","Avg on clock/day"],["avgBrk","Avg break/day"],["overBreak","Over-break days"],["early","Left early"],["noOut","No clock-out"],["irregular","Self-edits"]];
   let emps = d ? [...d.employees] : [];
   const sk = an.sort;
   emps.sort((a, b) => sk === "name" ? a.name.localeCompare(b.name)
@@ -573,7 +594,7 @@ function renderAnalytics() {
       <div class="tile"><div class="n ${t.late?"bad":""}">${t.late}</div><div class="l">Late arrivals</div></div>
       <div class="tile"><div class="n ${t.absent?"bad":""}">${t.absent}</div><div class="l">Absences (scheduled, no clock-in)</div></div>
       <div class="tile"><div class="n ${t.overBreak?"bad":""}">${t.overBreak}</div><div class="l">Days over break limit</div></div>
-      <div class="tile"><div class="n ${t.irregular?"bad":""}">${t.irregular}</div><div class="l">Irregular entries (edits, back-dated)</div></div>
+      <div class="tile"><div class="n ${t.irregular?"bad":""}">${t.irregular}</div><div class="l">Self-edits by staff (not via HR)</div></div>
     </div>
     <div class="charts">
       <div class="chart"><h3>Daily attendance</h3><canvas id="chAtt"></canvas></div>
@@ -614,7 +635,7 @@ function renderAnalytics() {
           <td class="flags">${[
             x.absent && '<span class="pill over">Absent</span>', x.late && '<span class="pill late">Late</span>',
             x.early && '<span class="pill break">Left early</span>', x.over && '<span class="pill over">Over break</span>',
-            x.noOut && '<span class="pill break">No clock-out</span>', x.irr && `<span class="pill over">${x.irr} irregular</span>`,
+            x.noOut && '<span class="pill break">No clock-out</span>', x.irr && `<span class="pill over">${x.irr} self-edit${x.irr>1?"s":""}</span>`,
             !x.shift && x.firstIn && '<span class="pill done">Unscheduled day</span>',
             x.isToday && x.shift && !x.firstIn && !x.absent && '<span class="pill notin">Not in yet</span>'
           ].filter(Boolean).join("") || '<span class="muted">—</span>'}</td>
@@ -664,7 +685,7 @@ function drawCharts(d) {
 
 function exportCsv() {
   const d = an.data; if (!d) return;
-  const head = ["Staff","Scheduled days","Present","Attendance %","On time %","Late","Absent","Avg clock-in","Avg hours on clock/day","Avg break min/day","Over-break days","Left early","No clock-out","Irregular entries"];
+  const head = ["Staff","Scheduled days","Present","Attendance %","On time %","Late","Absent","Avg clock-in","Avg hours on clock/day","Avg break min/day","Over-break days","Left early","No clock-out","Self-edits"];
   const rows = d.employees.map(e => [e.name, e.sched, e.present, e.attendance ?? "", e.punctuality ?? "", e.late, e.absent, hhmm(e.avgIn),
     e.avgWorked == null ? "" : (e.avgWorked/3600e3).toFixed(2), e.avgBrk == null ? "" : Math.round(e.avgBrk/60000), e.overBreak, e.early, e.noOut, e.irregular]);
   const csv = [head, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -674,14 +695,130 @@ function exportCsv() {
   document.body.appendChild(a); a.click(); a.remove();
 }
 
+/* ===== HR CORRECTIONS ===== */
+const hr = { staff: null, uid: "", day: "", existing: null, msg: null, err: null, busy: false };
+const me = () => pca.getActiveAccount() || {};
+const isHR = () => CONFIG.hrEmails.includes((me().username || "").toLowerCase());
+const dtISO = (day, hm) => new Date(`${day}T${hm}:00+04:00`).toISOString();
+
+async function loadHRStaff() {
+  try {
+    const token = await getToken(), t = dubaiDateKey(new Date());
+    const shifts = await fetchShifts(token, keyToDate(addDays(t, -35)), keyToDate(addDays(t, 15)));
+    await ensureUsers(token, shifts.map(s => s.userId));
+    hr.staff = [...new Set(shifts.map(s => s.userId))].filter(id => id && !isExcluded(id))
+      .map(id => ({ id, name: nameOf(id) })).sort((a, b) => a.name.localeCompare(b.name));
+  } catch (e) { hr.err = "Couldn't load staff list: " + e.message; hr.staff = []; }
+  renderHR();
+}
+async function loadExisting(keepMsg = false) {
+  hr.existing = null; hr.err = null; if (!keepMsg) hr.msg = null;
+  if (!hr.uid || !hr.day) return renderHR();
+  hr.busy = true; renderHR();
+  try {
+    const token = await getToken();
+    const cards = await fetchCards(token, keyToDate(hr.day), keyToDate(addDays(hr.day, 1)));
+    hr.existing = cards.filter(c => c.userId === hr.uid).sort((a, b) => ms(a.clockInEvent.dateTime) - ms(b.clockInEvent.dateTime));
+  } catch (e) { hr.err = "Couldn't look up existing entries: " + e.message; }
+  hr.busy = false; renderHR();
+}
+
+async function saveCorrection(f) {
+  hr.msg = null; hr.err = null;
+  const today = dubaiDateKey(new Date()), now = Date.now();
+  const g = n => f.elements.namedItem(n);
+  const inT = g("inT").value, outT = g("outT").value, bS = g("bS").value, bE = g("bE").value, reason = g("reason").value.trim();
+  const target = hr.existing?.length ? hr.existing[Number(g("which")?.value || 0)] : null;
+  const errs = [];
+  if (!hr.uid) errs.push("Choose an employee.");
+  if (!hr.day || hr.day > today) errs.push("Date must be today or earlier.");
+  if (!inT) errs.push("Clock-in time is required.");
+  if (inT && ms(dtISO(hr.day, inT)) > now) errs.push("Clock-in can't be in the future.");
+  if (outT && inT && outT <= inT) errs.push("Clock-out must be after clock-in.");
+  if (outT && ms(dtISO(hr.day, outT)) > now) errs.push("Clock-out can't be in the future.");
+  if (!outT && hr.day < today) errs.push("For a past day, enter the clock-out time too.");
+  if ((bS || bE) && !(bS && bE && bE > bS)) errs.push("Break needs a start and a later end, or leave both empty.");
+  if (reason.length < 5) errs.push("Reason is required (e.g. the approval request and what happened).");
+  if (errs.length) { hr.err = errs.join(" "); return renderHR(); }
+
+  hr.busy = true; renderHR();
+  try {
+    const token = await getToken(WRITE_SCOPES);
+    const note = { contentType: "text", content: `HR correction by ${me().name || me().username}: ${reason}` };
+    const path = `/teams/${CONFIG.teamId}/schedule/timeCards`;
+    if (target) {
+      const body = {
+        userId: target.userId,
+        state: outT ? "clockedOut" : target.state,
+        clockInEvent: { dateTime: dtISO(hr.day, inT), isAtApprovedLocation: target.clockInEvent?.isAtApprovedLocation ?? null, notes: note },
+        clockOutEvent: outT ? { dateTime: dtISO(hr.day, outT), isAtApprovedLocation: null, notes: null } : (target.clockOutEvent || null),
+        breaks: (target.breaks || []).concat(bS ? [{ start: { dateTime: dtISO(hr.day, bS) }, end: { dateTime: dtISO(hr.day, bE) } }] : []),
+        notes: note
+      };
+      await graphSend("PUT", `${path}/${target.id}`, body, token);
+    } else {
+      const body = { userId: hr.uid, clockInEvent: { dateTime: dtISO(hr.day, inT), isAtApprovedLocation: true, notes: note } };
+      if (outT) body.clockOutEvent = { dateTime: dtISO(hr.day, outT), isAtApprovedLocation: true };
+      if (bS) body.breaks = [{ start: { dateTime: dtISO(hr.day, bS) }, end: { dateTime: dtISO(hr.day, bE) } }];
+      await graphSend("POST", path, body, token);
+    }
+    hr.msg = `Saved for ${nameOf(hr.uid)} on ${fmtKey(hr.day, { weekday: "short", day: "2-digit", month: "short" })}. It now shows as an HR correction on the board.`;
+    await loadExisting(true); refresh(); an.data = null;
+  } catch (e) {
+    hr.err = "Couldn't save: " + e.message + (e.status === 403 ? " – make sure you are an owner of 'Avaibe – Attendance'." : "");
+  }
+  hr.busy = false; renderHR();
+}
+
+function renderHR() {
+  const el = document.getElementById("hr");
+  if (!isHR()) { el.innerHTML = '<div class="center"><p class="muted">HR corrections are only available to HR.</p></div>'; return; }
+  if (!hr.staff) { el.innerHTML = '<div class="center"><p class="muted">Loading staff…</p></div>'; loadHRStaff(); return; }
+  const ex = hr.existing, first = ex?.[0];
+  const t = x => x ? fmtTime(new Date(ms(x))) : "";
+  const pre = first ? { in: t(first.clockInEvent?.dateTime), out: t(first.clockOutEvent?.dateTime) } : { in: "", out: "" };
+  const recent = (state.audit || []).filter(a => a.issues.some(i => i.by === "hr")).slice(0, 10);
+  el.innerHTML = `
+    <h2 class="sec" style="margin-top:0">HR corrections</h2>
+    <div class="note">Only use this for an <b>approved Missed clock-in request</b> from Teams Approvals. Every correction is saved under your name with the reason, and shows on the board as an HR correction. Staff must not edit their own time sheets.</div>
+    ${hr.err ? `<div class="err">${esc(hr.err)}</div>` : ""}${hr.msg ? `<div class="tile ok" style="margin-bottom:12px">✓ ${esc(hr.msg)}</div>` : ""}
+    <form id="hrForm" class="tile" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;align-items:end">
+      <label>Employee<br><select name="uid" style="width:100%;font:inherit;padding:6px;border:1px solid var(--line);border-radius:8px">
+        <option value="">Choose…</option>${hr.staff.map(s => `<option value="${s.id}" ${s.id === hr.uid ? "selected" : ""}>${esc(s.name)}</option>`).join("")}</select></label>
+      <label>Date<br><input type="date" name="day" max="${dubaiDateKey(new Date())}" value="${hr.day}" style="width:100%"></label>
+      <div style="grid-column:span 2" class="sub">${hr.busy ? "Working…" : !hr.uid || !hr.day ? "Pick an employee and date to see what's already recorded." :
+        ex && ex.length ? `Existing entr${ex.length > 1 ? "ies" : "y"}: ${ex.map((c, n) => `<label><input type="radio" name="which" value="${n}" ${n ? "" : "checked"}> in ${t(c.clockInEvent?.dateTime)} · out ${t(c.clockOutEvent?.dateTime) || "<b>missing</b>"} · ${(c.breaks || []).length} break(s)</label>`).join(" &nbsp; ")} – saving will <b>update</b> it.`
+        : "No entry recorded – saving will <b>create</b> one."}</div>
+      <label>Clock-in<br><input type="time" name="inT" value="${pre.in}" style="width:100%"></label>
+      <label>Clock-out<br><input type="time" name="outT" value="${pre.out}" style="width:100%"></label>
+      <label>Add break start <span class="muted">(optional)</span><br><input type="time" name="bS" style="width:100%"></label>
+      <label>Add break end<br><input type="time" name="bE" style="width:100%"></label>
+      <label style="grid-column:span 3">Reason / approval reference<br><input name="reason" placeholder="e.g. Approved request 18 Nov – forgot to clock in, started 09:00" style="width:100%;font:inherit;padding:6px;border:1px solid var(--line);border-radius:8px"></label>
+      <button class="primary" ${hr.busy ? "disabled" : ""}>Save correction</button>
+    </form>
+    <h2 class="sec">Recent HR corrections</h2>
+    ${recent.length ? `<table><thead><tr><th>Staff</th><th>Day</th><th>Details</th></tr></thead><tbody>${recent.map(a => a.issues.filter(i => i.by === "hr").map(i =>
+      `<tr><td>${esc(a.name)}</td><td class="num">${fmtDay(a.day)}</td><td>${esc(i.detail)}</td></tr>`).join("")).join("")}</tbody></table>`
+      : '<p class="muted">None in the last 30 days.</p>'}`;
+  const f = el.querySelector("#hrForm");
+  const fu = f.elements.namedItem("uid"), fd = f.elements.namedItem("day");
+  fu.onchange = () => { hr.uid = fu.value; loadExisting(); };
+  fd.onchange = () => { hr.day = fd.value; loadExisting(); };
+  f.onsubmit = ev => { ev.preventDefault(); saveCorrection(f); };
+}
+
 /* ===== VIEWS ===== */
 function showView() {
-  const v = location.hash === "#analytics" ? "analytics" : "live";
+  const v = location.hash === "#analytics" ? "analytics" : location.hash === "#hr" ? "hr" : "live";
   document.getElementById("app").hidden = v !== "live";
   document.getElementById("an").hidden = v !== "analytics";
+  document.getElementById("hr").hidden = v !== "hr";
   document.getElementById("tabLive").className = v === "live" ? "on" : "";
   document.getElementById("tabAn").className = v === "analytics" ? "on" : "";
+  document.getElementById("tabHr").className = v === "hr" ? "on" : "";
+  document.getElementById("tabHr").hidden = !isHR();
   if (v === "analytics" && !an.data && !an.loading) loadAnalytics();
+  if (v === "hr") renderHR();
 }
 window.addEventListener("hashchange", () => started && showView());
 
