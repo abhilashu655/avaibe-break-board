@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Avaibe – Live Break Board</title>
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.27.0/lib/msal-browser.min.js"></script>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --muted:#6b7280; --line:#e5e7eb;
+    --green:#16a34a; --green-bg:#dcfce7; --amber:#d97706; --amber-bg:#fef3c7;
+    --red:#dc2626; --red-bg:#fee2e2; --grey:#6b7280; --grey-bg:#f3f4f6; --blue:#2563eb; --blue-bg:#dbeafe;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.45 "Segoe UI",system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--ink)}
+  header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 24px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:2}
+  h1{font-size:18px;margin:0}
+  .sub{color:var(--muted);font-size:12px}
+  .right{display:flex;align-items:center;gap:10px}
+  button{font:inherit;border:1px solid var(--line);background:var(--card);border-radius:8px;padding:6px 12px;cursor:pointer}
+  button.primary{background:#4f46e5;color:#fff;border-color:#4f46e5}
+  main{padding:20px 24px;max-width:1200px;margin:0 auto}
+  .tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:18px}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .tile .n{font-size:26px;font-weight:600}
+  .tile .l{color:var(--muted);font-size:12px}
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{font-size:12px;color:var(--muted);font-weight:600;background:#fafafa;cursor:pointer;user-select:none}
+  tr:last-child td{border-bottom:none}
+  td.num{font-variant-numeric:tabular-nums}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600}
+  .pill::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
+  .working{color:var(--green);background:var(--green-bg)}
+  .break{color:var(--amber);background:var(--amber-bg)}
+  .over{color:var(--red);background:var(--red-bg)}
+  .late{color:var(--red);background:var(--red-bg)}
+  .notin{color:var(--grey);background:var(--grey-bg)}
+  .done{color:var(--blue);background:var(--blue-bg)}
+  .timer{font-weight:600}
+  .timer.warn{color:var(--red)}
+  .muted{color:var(--muted)}
+  .center{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;gap:12px;text-align:center}
+  .err{background:var(--red-bg);color:var(--red);padding:10px 14px;border-radius:8px;margin-bottom:12px;white-space:pre-wrap}
+  .legend{margin-top:12px;color:var(--muted);font-size:12px}
+  @media (max-width:800px){.tiles{grid-template-columns:repeat(2,1fr)} th:nth-child(5),td:nth-child(5){display:none}}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Avaibe – Live Break Board</h1>
+    <div class="sub" id="sub">Shifts time clock · Dubai time</div>
+  </div>
+  <div class="right">
+    <span class="sub" id="updated"></span>
+    <button id="refreshBtn" hidden>Refresh</button>
+    <button id="signOutBtn" hidden>Sign out</button>
+  </div>
+</header>
+<main id="app">
+  <div class="center" id="signin">
+    <p>Sign in with your Avaibe Microsoft account to see live clock-in and break status.</p>
+    <button class="primary" id="signInBtn">Sign in with Microsoft</button>
+    <p class="sub">Only schedule owners (managers) can see the team's time cards.</p>
+  </div>
+</main>
+
+<script>
+/* ===== CONFIG ===== */
+const CONFIG = {
+  clientId: "55833e79-a769-4d81-897d-93824a9402f0",
+  tenantId: "41385911-2567-4873-bcf2-e28193046199",
+  teamId:   "55a0dee6-69f7-447d-8a27-ae00decfad30",   // Avaibe – Attendance
+  timeZone: "Asia/Dubai",
+  breakLimitMin: 60,       // daily break allowance
+  lateGraceMin: 15,        // flag as late if not clocked in this long after shift start
+  refreshSec: 30,
+  excludeUserEmails: ["abhilash@avaibe.com", "director@avaibe.com"] // not tracked
+};
+const SCOPES = ["Schedule.Read.All", "User.ReadBasic.All"];
+const GRAPH = "https://graph.microsoft.com/v1.0";
+
+/* ===== AUTH ===== */
+const inIframe = window.self !== window.top;
+</script>
+<script>
+const msalLib = window.msal;
+const pca = new msalLib.PublicClientApplication({
+  auth: {
+    clientId: CONFIG.clientId,
+    authority: `https://login.microsoftonline.com/${CONFIG.tenantId}`,
+    redirectUri: window.location.origin + window.location.pathname
+  },
+  cache: { cacheLocation: "localStorage" }
+});
+
+async function getToken() {
+  const account = pca.getActiveAccount() || pca.getAllAccounts()[0];
+  if (!account) throw new Error("not-signed-in");
+  pca.setActiveAccount(account);
+  try {
+    return (await pca.acquireTokenSilent({ scopes: SCOPES, account })).accessToken;
+  } catch (e) {
+    if (e instanceof msalLib.InteractionRequiredAuthError) {
+      if (inIframe) return (await pca.acquireTokenPopup({ scopes: SCOPES })).accessToken;
+      await pca.acquireTokenRedirect({ scopes: SCOPES });
+    }
+    throw e;
+  }
+}
+
+async function signIn() {
+  if (inIframe) {
+    const r = await pca.loginPopup({ scopes: SCOPES });
+    pca.setActiveAccount(r.account);
+    start();
+  } else {
+    await pca.loginRedirect({ scopes: SCOPES });
+  }
+}
+
+/* ===== GRAPH ===== */
+async function graph(path, token) {
+  const url = path.startsWith("http") ? path : GRAPH + path;
+  const res = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+  if (!res.ok) {
+    let msg = res.status + " " + res.statusText;
+    try { const j = await res.json(); msg += " – " + (j.error?.message || ""); } catch {}
+    const err = new Error(msg); err.status = res.status; throw err;
+  }
+  return res.json();
+}
+async function graphAll(path, token, maxPages = 50) {
+  let out = [], next = path, pages = 0;
+  while (next && pages < maxPages) {
+    const j = await graph(next, token);
+    out = out.concat(j.value || []);
+    next = j["@odata.nextLink"]; pages++;
+  }
+  return out;
+}
+
+/* ===== TIME HELPERS ===== */
+const fmtTime = d => d ? new Intl.DateTimeFormat("en-GB",{timeZone:CONFIG.timeZone,hour:"2-digit",minute:"2-digit"}).format(d) : "—";
+const dubaiDateKey = d => new Intl.DateTimeFormat("en-CA",{timeZone:CONFIG.timeZone,year:"numeric",month:"2-digit",day:"2-digit"}).format(d);
+function dubaiMidnightUtc(now = new Date()) {
+  // Dubai is UTC+4 with no DST
+  const key = dubaiDateKey(now); // YYYY-MM-DD
+  return new Date(key + "T00:00:00+04:00");
+}
+function dur(ms) {
+  if (ms == null || ms < 0) return "—";
+  const s = Math.floor(ms/1000), h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
+  return (h ? h + ":" + String(m).padStart(2,"0") : String(m)) + ":" + String(sec).padStart(2,"0");
+}
+const mins = ms => Math.round(ms/60000);
+
+/* ===== DATA ===== */
+let state = { rows: [], fetchedAt: null, sortKey: "status", users: {} };
+
+async function loadData() {
+  const token = await getToken();
+  const dayStart = dubaiMidnightUtc();
+  const dayEnd = new Date(dayStart.getTime() + 24*3600*1000);
+
+  // Today's time cards (try server-side filter, fall back to client-side)
+  let cards;
+  try {
+    cards = await graphAll(`/teams/${CONFIG.teamId}/schedule/timeCards?$filter=clockInEvent/dateTime ge ${dayStart.toISOString()}&$top=200`, token);
+  } catch (e) {
+    if (e.status !== 400) throw e;
+    cards = (await graphAll(`/teams/${CONFIG.teamId}/schedule/timeCards?$top=200`, token, 100))
+      .filter(c => c.clockInEvent && new Date(c.clockInEvent.dateTime) >= dayStart);
+  }
+
+  // Today's shifts (roster)
+  let shifts = [];
+  try {
+    shifts = await graphAll(`/teams/${CONFIG.teamId}/schedule/shifts?$filter=sharedShift/startDateTime ge ${dayStart.toISOString()} and sharedShift/endDateTime le ${dayEnd.toISOString()}`, token);
+  } catch (e) { console.warn("shifts", e); }
+
+  // Team members via schedule owners/members: collect all user ids we know
+  const ids = new Set([...cards.map(c => c.userId), ...shifts.map(s => s.userId)].filter(Boolean));
+  const missing = [...ids].filter(id => !state.users[id]);
+  for (let i = 0; i < missing.length; i += 15) {
+    const chunk = missing.slice(i, i+15).map(id => `'${id}'`).join(",");
+    try {
+      const us = await graphAll(`/users?$filter=id in (${chunk})&$select=id,displayName,mail,userPrincipalName`, token);
+      us.forEach(u => state.users[u.id] = u);
+    } catch (e) { console.warn("users", e); }
+  }
+
+  const excluded = new Set(CONFIG.excludeUserEmails.map(x => x.toLowerCase()));
+  const byUser = {};
+  ids.forEach(id => byUser[id] = { id, cards: [], shift: null });
+  cards.forEach(c => byUser[c.userId]?.cards.push(c));
+  shifts.forEach(s => { if (byUser[s.userId]) byUser[s.userId].shift = s; });
+
+  const rows = [];
+  for (const u of Object.values(byUser)) {
+    const info = state.users[u.id] || {};
+    const email = (info.mail || info.userPrincipalName || "").toLowerCase();
+    if (excluded.has(email)) continue;
+    u.cards.sort((a,b) => new Date(a.clockInEvent.dateTime) - new Date(b.clockInEvent.dateTime));
+    const latest = u.cards[u.cards.length - 1];
+    const firstIn = u.cards[0] ? new Date(u.cards[0].clockInEvent.dateTime) : null;
+    // breaks across all of today's cards
+    const breaks = u.cards.flatMap(c => c.breaks || []).map(b => ({
+      start: b.start?.dateTime ? new Date(b.start.dateTime) : null,
+      end: b.end?.dateTime ? new Date(b.end.dateTime) : null
+    })).filter(b => b.start);
+    const openBreak = latest && latest.state === "onBreak"
+      ? breaks.filter(b => !b.end).sort((a,b) => b.start - a.start)[0] || null : null;
+    const closedBreakMs = breaks.filter(b => b.end).reduce((t,b) => t + (b.end - b.start), 0);
+    const shiftStart = u.shift?.sharedShift?.startDateTime ? new Date(u.shift.sharedShift.startDateTime) : null;
+    const shiftEnd = u.shift?.sharedShift?.endDateTime ? new Date(u.shift.sharedShift.endDateTime) : null;
+    const clockOut = latest?.clockOutEvent?.dateTime ? new Date(latest.clockOutEvent.dateTime) : null;
+    let status;
+    if (!latest) status = "notin";
+    else if (latest.state === "onBreak") status = "break";
+    else if (latest.state === "clockedOut") status = "done";
+    else status = "working";
+    rows.push({
+      id: u.id, name: info.displayName || info.mail || u.id.slice(0,8),
+      status, firstIn, clockOut, openBreak, closedBreakMs,
+      breakCount: breaks.length, shiftStart, shiftEnd
+    });
+  }
+  state.rows = rows;
+  state.fetchedAt = new Date();
+}
+
+/* ===== RENDER ===== */
+const ORDER = { over:0, late:1, break:2, working:3, notin:4, done:5 };
+function derive(r, now) {
+  const breakTotal = r.closedBreakMs + (r.openBreak ? now - r.openBreak.start : 0);
+  let status = r.status;
+  if (status === "break" && breakTotal > CONFIG.breakLimitMin*60000) status = "over";
+  if (status === "notin" && r.shiftStart && now - r.shiftStart > CONFIG.lateGraceMin*60000 && (!r.shiftEnd || now < r.shiftEnd)) status = "late";
+  return { ...r, breakTotal, dstatus: status, current: r.openBreak ? now - r.openBreak.start : null };
+}
+const LABEL = { working:"Working", break:"On break", over:"Over break limit", late:"Late – not clocked in", notin:"Not clocked in", done:"Clocked out" };
+
+function render() {
+  const app = document.getElementById("app");
+  const now = new Date();
+  const rows = state.rows.map(r => derive(r, now));
+  const count = k => rows.filter(r => k.includes(r.dstatus)).length;
+  const k = state.sortKey;
+  rows.sort((a,b) => k === "name" ? a.name.localeCompare(b.name)
+    : k === "breakTotal" ? b.breakTotal - a.breakTotal
+    : (ORDER[a.dstatus]-ORDER[b.dstatus]) || ((b.current||0)-(a.current||0)) || a.name.localeCompare(b.name));
+  app.innerHTML = `
+    ${state.error ? `<div class="err">${state.error}</div>` : ""}
+    <div class="tiles">
+      <div class="tile"><div class="n">${count(["working"])}</div><div class="l">Working</div></div>
+      <div class="tile"><div class="n">${count(["break","over"])}</div><div class="l">On break now</div></div>
+      <div class="tile"><div class="n" style="color:var(--red)">${count(["over","late"])}</div><div class="l">Need attention</div></div>
+      <div class="tile"><div class="n">${count(["notin","late"])}</div><div class="l">Not clocked in</div></div>
+      <div class="tile"><div class="n">${count(["done"])}</div><div class="l">Clocked out</div></div>
+    </div>
+    <table>
+      <thead><tr>
+        <th data-k="name">Staff</th><th data-k="status">Status</th><th>Clocked in</th>
+        <th>Break started</th><th>On current break</th><th data-k="breakTotal">Break total today</th><th>Breaks</th>
+      </tr></thead>
+      <tbody>
+      ${rows.length ? rows.map(r => `
+        <tr>
+          <td>${esc(r.name)}</td>
+          <td><span class="pill ${r.dstatus}">${LABEL[r.dstatus]}</span></td>
+          <td class="num">${fmtTime(r.firstIn)}${r.dstatus==="done" ? ` <span class="muted">→ ${fmtTime(r.clockOut)}</span>` : ""}</td>
+          <td class="num">${r.openBreak ? fmtTime(r.openBreak.start) : "—"}</td>
+          <td class="num timer ${r.dstatus==="over"?"warn":""}">${r.current!=null ? dur(r.current) : "—"}</td>
+          <td class="num ${r.breakTotal > CONFIG.breakLimitMin*60000 ? "timer warn":""}">${r.breakTotal ? mins(r.breakTotal) + " / " + CONFIG.breakLimitMin + " min" : "—"}</td>
+          <td class="num">${r.breakCount || "—"}</td>
+        </tr>`).join("") : `<tr><td colspan="7" class="muted">No shifts or clock-ins today.</td></tr>`}
+      </tbody>
+    </table>
+    <div class="legend">Refreshes every ${CONFIG.refreshSec}s · timers tick live · "Late" = not clocked in ${CONFIG.lateGraceMin} min after shift start · break limit ${CONFIG.breakLimitMin} min/day (paid)</div>`;
+  app.querySelectorAll("th[data-k]").forEach(th => th.onclick = () => { state.sortKey = th.dataset.k; render(); });
+  document.getElementById("updated").textContent = state.fetchedAt ? "Updated " + fmtTime(state.fetchedAt) : "";
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* ===== LOOP ===== */
+let started = false;
+async function refresh() {
+  try { await loadData(); state.error = null; }
+  catch (e) {
+    if (e.message === "not-signed-in") return showSignIn();
+    state.error = e.status === 403
+      ? "Access denied reading Shifts time cards. Make sure you are an owner of the 'Avaibe – Attendance' team and that admin consent was granted for Schedule.Read.All."
+      : "Couldn't refresh: " + e.message;
+  }
+  render();
+}
+function start() {
+  if (started) return; started = true;
+  document.getElementById("refreshBtn").hidden = false;
+  document.getElementById("signOutBtn").hidden = false;
+  const acc = pca.getActiveAccount();
+  document.getElementById("sub").textContent = "Shifts time clock · Dubai time · " + (acc?.username || "");
+  document.getElementById("app").innerHTML = '<div class="center"><p class="muted">Loading…</p></div>';
+  refresh();
+  setInterval(refresh, CONFIG.refreshSec * 1000);
+  setInterval(() => state.fetchedAt && render(), 1000);
+}
+function showSignIn() {
+  document.getElementById("app").innerHTML = document.getElementById("app").innerHTML.includes("signInBtn") ? document.getElementById("app").innerHTML :
+    '<div class="center"><p>Sign in with your Avaibe Microsoft account.</p><button class="primary" id="signInBtn">Sign in with Microsoft</button></div>';
+  document.getElementById("signInBtn").onclick = () => signIn().catch(e => alertBox(e));
+}
+function alertBox(e){ const a=document.getElementById("app"); a.insertAdjacentHTML("afterbegin", `<div class="err">${esc(e.message||e)}</div>`); }
+
+document.getElementById("refreshBtn").onclick = refresh;
+document.getElementById("signOutBtn").onclick = () => inIframe ? pca.logoutPopup() : pca.logoutRedirect();
+
+(async () => {
+  try {
+    await pca.initialize();
+    const r = await pca.handleRedirectPromise();
+    if (r?.account) pca.setActiveAccount(r.account);
+    if (pca.getAllAccounts().length) start(); else showSignIn();
+  } catch (e) { showSignIn(); alertBox(e); }
+})();
+</script>
+</body>
+</html>
