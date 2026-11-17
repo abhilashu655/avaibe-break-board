@@ -3,8 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Avaibe – Live Break Board</title>
+<title>Avaibe – Attendance Board</title>
 <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.27.0/lib/msal-browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   :root{
     --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --muted:#6b7280; --line:#e5e7eb;
@@ -46,14 +47,33 @@
   h2.sec{font-size:15px;margin:28px 0 8px}
   .tile.ok{color:var(--green);font-weight:600}
   td{white-space:normal}
+  nav.tabs{display:flex;gap:4px;margin-left:18px}
+  nav.tabs a{padding:6px 12px;border-radius:8px;color:var(--muted);text-decoration:none;font-weight:600}
+  nav.tabs a.on{background:#eef2ff;color:#4f46e5}
+  .bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:16px}
+  .bar .seg button.on{background:#4f46e5;color:#fff;border-color:#4f46e5}
+  .bar input[type=date]{font:inherit;border:1px solid var(--line);border-radius:8px;padding:5px 8px}
+  .tiles.k8{grid-template-columns:repeat(4,1fr)}
+  .charts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:6px 0 18px}
+  .chart{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;height:280px}
+  .chart h3{font-size:13px;margin:0 0 6px;color:var(--muted);font-weight:600}
+  .chart canvas{max-height:236px}
+  td.link{color:#4f46e5;cursor:pointer;font-weight:600}
+  .good{color:var(--green);font-weight:600} .bad{color:var(--red);font-weight:600} .warnc{color:var(--amber);font-weight:600}
+  .note{background:#eef2ff;color:#3730a3;border-radius:8px;padding:8px 12px;font-size:12px;margin:10px 0}
+  .flags span{margin-right:4px}
+  @media (max-width:900px){.charts{grid-template-columns:1fr}.tiles.k8{grid-template-columns:repeat(2,1fr)}}
   @media (max-width:800px){.tiles{grid-template-columns:repeat(2,1fr)} th:nth-child(5),td:nth-child(5){display:none}}
 </style>
 </head>
 <body>
 <header>
-  <div>
-    <h1>Avaibe – Live Break Board</h1>
-    <div class="sub" id="sub">Shifts time clock · Dubai time</div>
+  <div style="display:flex;align-items:center">
+    <div>
+      <h1>Avaibe – Attendance Board</h1>
+      <div class="sub" id="sub">Shifts time clock · Dubai time</div>
+    </div>
+    <nav class="tabs" id="tabs" hidden><a href="#live" id="tabLive">Live</a><a href="#analytics" id="tabAn">Analytics</a></nav>
   </div>
   <div class="right">
     <span class="sub" id="updated"></span>
@@ -68,6 +88,7 @@
     <p class="sub">Only schedule owners (managers) can see the team's time cards.</p>
   </div>
 </main>
+<main id="an" hidden></main>
 
 <script>
 /* ===== CONFIG ===== */
@@ -355,6 +376,315 @@ function render() {
 }
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
+/* ===== SHARED FETCH ===== */
+const excludedSet = new Set(CONFIG.excludeUserEmails.map(x => x.toLowerCase()));
+const isExcluded = id => { const u = state.users[id] || {}; return excludedSet.has((u.mail || u.userPrincipalName || "").toLowerCase()); };
+const nameOf = id => { const u = state.users[id] || {}; return u.displayName || u.mail || (id || "").slice(0,8); };
+async function fetchCards(token, from, to) {
+  let cards;
+  try {
+    cards = await graphAll(`/teams/${CONFIG.teamId}/schedule/timeCards?$filter=clockInEvent/dateTime ge ${from.toISOString()}&$top=200`, token, 200);
+  } catch (e) {
+    if (e.status !== 400) throw e;
+    cards = await graphAll(`/teams/${CONFIG.teamId}/schedule/timeCards?$top=200`, token, 200);
+  }
+  return cards.filter(c => c.clockInEvent?.dateTime && new Date(c.clockInEvent.dateTime) >= from && new Date(c.clockInEvent.dateTime) < to);
+}
+async function fetchShifts(token, from, to) {
+  try {
+    return await graphAll(`/teams/${CONFIG.teamId}/schedule/shifts?$filter=sharedShift/startDateTime ge ${from.toISOString()} and sharedShift/endDateTime le ${to.toISOString()}`, token, 200);
+  } catch (e) { console.warn("shifts", e); return []; }
+}
+async function ensureUsers(token, ids) {
+  const missing = [...new Set(ids)].filter(id => id && !state.users[id]);
+  for (let i = 0; i < missing.length; i += 15) {
+    const chunk = missing.slice(i, i+15).map(id => `'${id}'`).join(",");
+    try {
+      const us = await graphAll(`/users?$filter=id in (${chunk})&$select=id,displayName,mail,userPrincipalName`, token);
+      us.forEach(u => state.users[u.id] = u);
+    } catch (e) { console.warn("users", e); }
+  }
+}
+
+/* ===== ANALYTICS ===== */
+const DAY = 864e5;
+const keyToDate = k => new Date(k + "T00:00:00+04:00");
+const addDays = (k, n) => dubaiDateKey(new Date(keyToDate(k).getTime() + n*DAY + 12*3600e3));
+const dow = k => new Date(k + "T12:00:00Z").getUTCDay();            // 0=Sun
+const mondayOf = k => addDays(k, -((dow(k) + 6) % 7));
+const minOfDay = t => { const [h, m] = fmtTime(new Date(t)).split(":").map(Number); return h*60 + m; };
+const hhmm = m => m == null || isNaN(m) ? "—" : String(Math.floor(m/60)).padStart(2,"0") + ":" + String(Math.round(m%60)).padStart(2,"0");
+const pct = (a, b) => b ? Math.round(100*a/b) : null;
+const fmtKey = (k, opts) => new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", ...opts }).format(new Date(k + "T12:00:00Z"));
+const hrs = msv => msv == null ? "—" : (msv/3600e3).toFixed(1) + " h";
+const mn = msv => msv == null ? "—" : Math.round(msv/60000) + " min";
+
+const an = { preset: "this-week", from: null, to: null, data: null, sel: null, sort: "name", loading: false, error: null, charts: [] };
+function presetRange(p) {
+  const t = dubaiDateKey(new Date());
+  if (p === "this-week")  return [mondayOf(t), t];
+  if (p === "last-week")  { const m = addDays(mondayOf(t), -7); return [m, addDays(m, 6)]; }
+  if (p === "this-month") return [t.slice(0,8) + "01", t];
+  if (p === "last-month") { const first = t.slice(0,8) + "01", lastPrev = addDays(first, -1); return [lastPrev.slice(0,8) + "01", lastPrev]; }
+  if (p === "last-30")    return [addDays(t, -29), t];
+  return [an.from, an.to];
+}
+
+async function loadAnalytics() {
+  if (an.preset !== "custom") [an.from, an.to] = presetRange(an.preset);
+  if (!an.from || !an.to || an.from > an.to) { an.error = "Pick a valid date range."; return renderAnalytics(); }
+  an.loading = true; an.error = null; renderAnalytics();
+  try {
+    const token = await getToken();
+    const from = keyToDate(an.from), to = keyToDate(addDays(an.to, 1));
+    const [cards, shifts] = await Promise.all([fetchCards(token, from, to), fetchShifts(token, from, to)]);
+    await ensureUsers(token, [...cards.map(c => c.userId), ...shifts.map(s => s.userId)]);
+    an.data = computeAnalytics(cards, shifts, an.from, an.to);
+  } catch (e) {
+    if (e.message === "not-signed-in") return showSignIn();
+    an.error = "Couldn't load analytics: " + e.message;
+  }
+  an.loading = false; renderAnalytics();
+}
+
+function computeAnalytics(cards, shifts, fromKey, toKey, nowMs = Date.now()) {
+  const todayKey = dubaiDateKey(new Date(nowMs));
+  const grace = CONFIG.lateGraceMin*60000, limit = CONFIG.breakLimitMin*60000;
+  const days = []; for (let k = fromKey; k <= toKey && k <= todayKey; k = addDays(k, 1)) days.push(k);
+  const daySet = new Set(days);
+  const per = {};
+  const slot = (u, k) => ((per[u] ??= {})[k] ??= { shift: null, cards: [] });
+  for (const s of shifts) {
+    if (!s.userId || !s.sharedShift?.startDateTime) continue;
+    const st = ms(s.sharedShift.startDateTime), en = ms(s.sharedShift.endDateTime);
+    slot(s.userId, dubaiDateKey(new Date(st))).shift = { start: st, end: en };
+  }
+  for (const c of cards) slot(c.userId, dubaiDateKey(new Date(ms(c.clockInEvent.dateTime)))).cards.push(c);
+
+  const employees = [], dailyMap = Object.fromEntries(days.map(k => [k, { k, sched: 0, onTime: 0, late: 0, absent: 0, brk: [], extra: 0 }]));
+  for (const uid of Object.keys(per)) {
+    if (isExcluded(uid)) continue;
+    const e = { id: uid, name: nameOf(uid), sched: 0, present: 0, extra: 0, absent: 0, late: 0, early: 0, noOut: 0, overBreak: 0,
+                workedMs: 0, workedDays: 0, hoursDays: 0, brkMs: 0, inMins: [], irregular: 0, days: [] };
+    for (const k of Object.keys(per[uid]).sort()) {
+      if (!daySet.has(k)) continue;
+      const { shift: s, cards: cs } = per[uid][k];
+      cs.sort((a, b) => ms(a.clockInEvent.dateTime) - ms(b.clockInEvent.dateTime));
+      const isToday = k === todayKey;
+      const firstIn = cs.length ? ms(cs[0].clockInEvent.dateTime) : null;
+      const open = cs.some(c => c.state !== "clockedOut");
+      const outs = cs.map(c => ms(c.clockOutEvent?.dateTime)).filter(Boolean);
+      const lastOut = outs.length ? Math.max(...outs) : null;
+      let worked = 0, brk = 0, brkCount = 0;
+      const complete = isToday || cs.every(c => c.clockOutEvent?.dateTime);
+      for (const c of cs) {
+        const i = ms(c.clockInEvent.dateTime), o = ms(c.clockOutEvent?.dateTime) ?? (isToday ? nowMs : null);
+        if (o) worked += o - i;
+        for (const b of c.breaks || []) {
+          const bs = ms(b.start?.dateTime); if (!bs) continue;
+          const be = ms(b.end?.dateTime) ?? (isToday && c.state === "onBreak" ? nowMs : null);
+          brkCount++; if (be) brk += be - bs;
+        }
+      }
+      const elapsed = s && (k < todayKey || cs.length || nowMs > s.end);
+      const late = !!(s && firstIn && firstIn > s.start + grace);
+      const early = !!(s && lastOut && !open && lastOut < s.end - grace);
+      const noOut = open && k < todayKey;
+      const absent = !!(s && !cs.length && (k < todayKey || nowMs > s.end));
+      const over = brk > limit;
+      const irr = cs.length ? auditCards(cs, excludedSet).reduce((t, a) => t + a.issues.length, 0) : 0;
+      if (elapsed) e.sched++;
+      if (s && cs.length) e.present++;
+      if (!s && cs.length) e.extra++;
+      if (absent) e.absent++;
+      if (late) e.late++;
+      if (early) e.early++;
+      if (noOut) e.noOut++;
+      if (over) e.overBreak++;
+      if (cs.length) { e.workedDays++; e.brkMs += brk; e.inMins.push(minOfDay(firstIn)); }
+      if (cs.length && complete) { e.hoursDays++; e.workedMs += worked; }
+      e.irregular += irr;
+      e.days.push({ k, shift: s, firstIn, lastOut, open, worked: cs.length && complete ? worked : null, brk: cs.length ? brk : null, brkCount, late, early, noOut, absent, over, irr, isToday });
+      const d = dailyMap[k];
+      if (elapsed) d.sched++;
+      if (s && cs.length) (late ? d.late++ : d.onTime++);
+      if (!s && cs.length) d.extra++;
+      if (absent) d.absent++;
+      if (cs.length) d.brk.push(brk);
+    }
+    if (!e.days.length) continue;
+    e.attendance = pct(e.present, e.sched);
+    e.punctuality = pct(e.present - e.late, e.present);
+    e.avgIn = e.inMins.length ? e.inMins.reduce((a, b) => a + b, 0) / e.inMins.length : null;
+    e.avgWorked = e.hoursDays ? e.workedMs / e.hoursDays : null;
+    e.avgBrk = e.workedDays ? e.brkMs / e.workedDays : null;
+    employees.push(e);
+  }
+  const daily = days.map(k => { const d = dailyMap[k]; return { ...d, avgBrk: d.brk.length ? d.brk.reduce((a, b) => a + b, 0) / d.brk.length : null }; });
+  const sum = f => employees.reduce((t, e) => t + (e[f] || 0), 0);
+  const team = {
+    staff: employees.length, sched: sum("sched"), present: sum("present"), late: sum("late"), absent: sum("absent"),
+    early: sum("early"), noOut: sum("noOut"), overBreak: sum("overBreak"), irregular: sum("irregular"),
+    workedDays: sum("workedDays"), hoursDays: sum("hoursDays"), workedMs: sum("workedMs"), brkMs: sum("brkMs")
+  };
+  team.attendance = pct(team.present, team.sched);
+  team.punctuality = pct(team.present - team.late, team.present);
+  team.avgWorked = team.hoursDays ? team.workedMs / team.hoursDays : null;
+  team.avgBrk = team.workedDays ? team.brkMs / team.workedDays : null;
+  return { employees, daily, team, days };
+}
+
+const tone = (v, good, bad, higherIsBetter = true) => v == null ? "" :
+  (higherIsBetter ? (v >= good ? "good" : v < bad ? "bad" : "warnc") : (v <= good ? "good" : v > bad ? "bad" : "warnc"));
+const pctTxt = v => v == null ? "—" : v + "%";
+
+function renderAnalytics() {
+  const el = document.getElementById("an");
+  const P = [["this-week","This week"],["last-week","Last week"],["this-month","This month"],["last-month","Last month"],["last-30","Last 30 days"],["custom","Custom"]];
+  const d = an.data, t = d?.team;
+  const rangeTxt = an.from && an.to ? `${fmtKey(an.from,{weekday:"short",day:"2-digit",month:"short"})} – ${fmtKey(an.to,{weekday:"short",day:"2-digit",month:"short"})} ${an.to.slice(0,4)}` : "";
+  const cols = [
+    ["name","Staff"],["attendance","Attendance"],["punctuality","On time"],["late","Late"],["absent","Absent"],["avgIn","Avg clock-in"],
+    ["avgWorked","Avg on clock/day"],["avgBrk","Avg break/day"],["overBreak","Over-break days"],["early","Left early"],["noOut","No clock-out"],["irregular","Irregular"]];
+  let emps = d ? [...d.employees] : [];
+  const sk = an.sort;
+  emps.sort((a, b) => sk === "name" ? a.name.localeCompare(b.name)
+    : (["attendance","punctuality"].includes(sk) ? (a[sk] ?? 999) - (b[sk] ?? 999) : (b[sk] ?? -1) - (a[sk] ?? -1)));
+  const sel = d && an.sel ? d.employees.find(e => e.id === an.sel) : null;
+
+  el.innerHTML = `
+    <div class="bar">
+      <span class="seg">${P.map(([k, l]) => `<button data-p="${k}" class="${an.preset===k?"on":""}">${l}</button>`).join(" ")}</span>
+      <span id="customBox" ${an.preset==="custom" ? "" : "hidden"}>
+        <input type="date" id="fromIn" value="${an.from || ""}"> → <input type="date" id="toIn" value="${an.to || ""}">
+        <button class="primary" id="applyBtn">Apply</button>
+      </span>
+      <span style="flex:1"></span>
+      <button id="csvBtn" ${d ? "" : "disabled"}>Export CSV</button>
+    </div>
+    ${an.error ? `<div class="err">${esc(an.error)}</div>` : ""}
+    <div class="sub" style="margin:-6px 0 12px">${rangeTxt}${d ? ` · ${d.days.length} day(s) so far · ${t.staff} staff` : ""}${an.loading ? " · loading…" : ""}</div>
+    ${d ? `
+    <div class="tiles k8">
+      <div class="tile"><div class="n ${tone(t.attendance,95,85)}">${pctTxt(t.attendance)}</div><div class="l">Attendance (scheduled days present)</div></div>
+      <div class="tile"><div class="n ${tone(t.punctuality,90,75)}">${pctTxt(t.punctuality)}</div><div class="l">On time (≤ ${CONFIG.lateGraceMin} min after start)</div></div>
+      <div class="tile"><div class="n">${hrs(t.avgWorked)}</div><div class="l">Avg time on clock per day</div></div>
+      <div class="tile"><div class="n ${tone(t.avgBrk==null?null:t.avgBrk/60000, CONFIG.breakLimitMin*0.8, CONFIG.breakLimitMin, false)}">${mn(t.avgBrk)}</div><div class="l">Avg break per day (limit ${CONFIG.breakLimitMin})</div></div>
+      <div class="tile"><div class="n ${t.late?"bad":""}">${t.late}</div><div class="l">Late arrivals</div></div>
+      <div class="tile"><div class="n ${t.absent?"bad":""}">${t.absent}</div><div class="l">Absences (scheduled, no clock-in)</div></div>
+      <div class="tile"><div class="n ${t.overBreak?"bad":""}">${t.overBreak}</div><div class="l">Days over break limit</div></div>
+      <div class="tile"><div class="n ${t.irregular?"bad":""}">${t.irregular}</div><div class="l">Irregular entries (edits, back-dated)</div></div>
+    </div>
+    <div class="charts">
+      <div class="chart"><h3>Daily attendance</h3><canvas id="chAtt"></canvas></div>
+      <div class="chart"><h3>Average break per person (minutes)</h3><canvas id="chBrk"></canvas></div>
+    </div>
+    <h2 class="sec">Employee performance <span class="muted">· click a column to sort, a name for daily detail</span></h2>
+    <table>
+      <thead><tr>${cols.map(([k, l]) => `<th data-s="${k}">${l}${an.sort===k?" ▾":""}</th>`).join("")}</tr></thead>
+      <tbody>${emps.length ? emps.map(e => `
+        <tr>
+          <td class="link" data-u="${e.id}">${esc(e.name)}</td>
+          <td class="num ${tone(e.attendance,95,85)}">${pctTxt(e.attendance)} <span class="muted">${e.present}/${e.sched}</span></td>
+          <td class="num ${tone(e.punctuality,90,75)}">${pctTxt(e.punctuality)}</td>
+          <td class="num ${e.late?"bad":""}">${e.late}</td>
+          <td class="num ${e.absent?"bad":""}">${e.absent}</td>
+          <td class="num">${hhmm(e.avgIn)}</td>
+          <td class="num">${hrs(e.avgWorked)}</td>
+          <td class="num ${tone(e.avgBrk==null?null:e.avgBrk/60000, CONFIG.breakLimitMin*0.8, CONFIG.breakLimitMin, false)}">${mn(e.avgBrk)}</td>
+          <td class="num ${e.overBreak?"bad":""}">${e.overBreak}</td>
+          <td class="num ${e.early?"warnc":""}">${e.early}</td>
+          <td class="num ${e.noOut?"warnc":""}">${e.noOut}</td>
+          <td class="num ${e.irregular?"bad":""}">${e.irregular}</td>
+        </tr>`).join("") : `<tr><td colspan="12" class="muted">No shifts or clock-ins in this range.</td></tr>`}</tbody>
+    </table>
+    ${sel ? `
+    <h2 class="sec">${esc(sel.name)} · day by day <button id="closeSel" style="margin-left:8px">Close</button></h2>
+    <table>
+      <thead><tr><th>Day</th><th>Shift</th><th>Clock-in</th><th>Clock-out</th><th>On clock</th><th>Breaks</th><th>Break total</th><th>Flags</th></tr></thead>
+      <tbody>${sel.days.slice().reverse().map(x => `
+        <tr>
+          <td class="num">${fmtKey(x.k,{weekday:"short",day:"2-digit",month:"short"})}</td>
+          <td class="num">${x.shift ? fmtTime(new Date(x.shift.start)) + "–" + fmtTime(new Date(x.shift.end)) : '<span class="muted">none</span>'}</td>
+          <td class="num ${x.late?"bad":""}">${x.firstIn ? fmtTime(new Date(x.firstIn)) : "—"}</td>
+          <td class="num ${x.early?"warnc":""}">${x.lastOut && !x.open ? fmtTime(new Date(x.lastOut)) : x.open ? (x.isToday ? '<span class="muted">working</span>' : '<span class="warnc">missing</span>') : "—"}</td>
+          <td class="num">${hrs(x.worked)}</td>
+          <td class="num">${x.brkCount || "—"}</td>
+          <td class="num ${x.over?"bad":""}">${mn(x.brk)}</td>
+          <td class="flags">${[
+            x.absent && '<span class="pill over">Absent</span>', x.late && '<span class="pill late">Late</span>',
+            x.early && '<span class="pill break">Left early</span>', x.over && '<span class="pill over">Over break</span>',
+            x.noOut && '<span class="pill break">No clock-out</span>', x.irr && `<span class="pill over">${x.irr} irregular</span>`,
+            !x.shift && x.firstIn && '<span class="pill done">Unscheduled day</span>',
+            x.isToday && x.shift && !x.firstIn && !x.absent && '<span class="pill notin">Not in yet</span>'
+          ].filter(Boolean).join("") || '<span class="muted">—</span>'}</td>
+        </tr>`).join("")}</tbody>
+    </table>` : ""}
+    <div class="note">These figures measure attendance and time discipline from Shifts clock data: who showed up, when, and how long breaks ran. They don't measure output or quality of work. Read them alongside delivery, not instead of it.</div>
+    ` : (an.loading ? '<div class="center"><p class="muted">Loading analytics…</p></div>' : "")}`;
+
+  el.querySelectorAll("button[data-p]").forEach(b => b.onclick = () => {
+    an.preset = b.dataset.p; an.sel = null;
+    if (an.preset === "custom") { if (!an.from) [an.from, an.to] = presetRange("this-week"); renderAnalytics(); }
+    else loadAnalytics();
+  });
+  const ap = el.querySelector("#applyBtn");
+  if (ap) ap.onclick = () => { an.from = el.querySelector("#fromIn").value; an.to = el.querySelector("#toIn").value; an.sel = null; loadAnalytics(); };
+  el.querySelectorAll("th[data-s]").forEach(th => th.onclick = () => { an.sort = th.dataset.s; renderAnalytics(); });
+  el.querySelectorAll("td[data-u]").forEach(td => td.onclick = () => { an.sel = td.dataset.u; renderAnalytics(); const cz = document.getElementById("closeSel"); if (cz && cz.scrollIntoView) cz.scrollIntoView({behavior:"smooth", block:"center"}); });
+  const cs = el.querySelector("#closeSel"); if (cs) cs.onclick = () => { an.sel = null; renderAnalytics(); };
+  const cb = el.querySelector("#csvBtn"); if (cb) cb.onclick = exportCsv;
+  if (d) drawCharts(d);
+}
+
+function drawCharts(d) {
+  an.charts.forEach(c => c.destroy()); an.charts = [];
+  if (!window.Chart) return;
+  const labels = d.daily.map(x => fmtKey(x.k, { weekday: "short", day: "2-digit" }));
+  an.charts.push(new Chart(document.getElementById("chAtt"), {
+    type: "bar",
+    data: { labels, datasets: [
+      { label: "On time", data: d.daily.map(x => x.onTime), backgroundColor: "#16a34a", stack: "a" },
+      { label: "Late", data: d.daily.map(x => x.late), backgroundColor: "#d97706", stack: "a" },
+      { label: "Absent", data: d.daily.map(x => x.absent), backgroundColor: "#dc2626", stack: "a" }
+    ]},
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom" } },
+      scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } } } }
+  }));
+  an.charts.push(new Chart(document.getElementById("chBrk"), {
+    type: "line",
+    data: { labels, datasets: [
+      { label: "Avg break (min)", data: d.daily.map(x => x.avgBrk == null ? null : Math.round(x.avgBrk/60000)), borderColor: "#4f46e5", backgroundColor: "#4f46e5", tension: .25, spanGaps: true },
+      { label: `Limit (${CONFIG.breakLimitMin})`, data: d.daily.map(() => CONFIG.breakLimitMin), borderColor: "#dc2626", borderDash: [6, 4], pointRadius: 0 }
+    ]},
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom" } },
+      scales: { x: { grid: { display: false } }, y: { beginAtZero: true } } }
+  }));
+}
+
+function exportCsv() {
+  const d = an.data; if (!d) return;
+  const head = ["Staff","Scheduled days","Present","Attendance %","On time %","Late","Absent","Avg clock-in","Avg hours on clock/day","Avg break min/day","Over-break days","Left early","No clock-out","Irregular entries"];
+  const rows = d.employees.map(e => [e.name, e.sched, e.present, e.attendance ?? "", e.punctuality ?? "", e.late, e.absent, hhmm(e.avgIn),
+    e.avgWorked == null ? "" : (e.avgWorked/3600e3).toFixed(2), e.avgBrk == null ? "" : Math.round(e.avgBrk/60000), e.overBreak, e.early, e.noOut, e.irregular]);
+  const csv = [head, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = `avaibe-attendance_${an.from}_to_${an.to}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+/* ===== VIEWS ===== */
+function showView() {
+  const v = location.hash === "#analytics" ? "analytics" : "live";
+  document.getElementById("app").hidden = v !== "live";
+  document.getElementById("an").hidden = v !== "analytics";
+  document.getElementById("tabLive").className = v === "live" ? "on" : "";
+  document.getElementById("tabAn").className = v === "analytics" ? "on" : "";
+  if (v === "analytics" && !an.data && !an.loading) loadAnalytics();
+}
+window.addEventListener("hashchange", () => started && showView());
+
 /* ===== LOOP ===== */
 let started = false;
 async function refresh() {
@@ -373,7 +703,9 @@ function start() {
   document.getElementById("signOutBtn").hidden = false;
   const acc = pca.getActiveAccount();
   document.getElementById("sub").textContent = "Shifts time clock · Dubai time · " + (acc?.username || "");
+  document.getElementById("tabs").hidden = false;
   document.getElementById("app").innerHTML = '<div class="center"><p class="muted">Loading…</p></div>';
+  showView();
   refresh();
   setInterval(refresh, CONFIG.refreshSec * 1000);
   setInterval(() => state.fetchedAt && render(), 1000);
@@ -385,7 +717,7 @@ function showSignIn() {
 }
 function alertBox(e){ const a=document.getElementById("app"); a.insertAdjacentHTML("afterbegin", `<div class="err">${esc(e.message||e)}</div>`); }
 
-document.getElementById("refreshBtn").onclick = refresh;
+document.getElementById("refreshBtn").onclick = () => location.hash === "#analytics" ? loadAnalytics() : refresh();
 document.getElementById("signOutBtn").onclick = () => inIframe ? pca.logoutPopup() : pca.logoutRedirect();
 
 (async () => {
