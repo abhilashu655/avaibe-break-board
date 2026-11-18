@@ -9,7 +9,7 @@ permissions:
 jobs:
   scope:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
       - name: Restrict app to hr@avaibe.com (Exchange RBAC for Applications)
         shell: pwsh
@@ -33,10 +33,18 @@ jobs:
             Enable-OrganizationCustomization
           } else { Write-Host 'Organization customization already enabled' }
 
-          if (-not (Get-ManagementScope -Identity 'HR mailbox only' -ErrorAction SilentlyContinue)) {
-            New-ManagementScope -Name 'HR mailbox only' -RecipientRestrictionFilter "PrimarySmtpAddress -eq 'hr@avaibe.com'" | Out-Null
-            Write-Host 'Created scope HR mailbox only'
-          } else { Write-Host 'Scope already exists' }
+          $deadline = (Get-Date).AddMinutes(50)
+          while (-not (Get-ManagementScope -Identity 'HR mailbox only' -ErrorAction SilentlyContinue)) {
+            try {
+              New-ManagementScope -Name 'HR mailbox only' -RecipientRestrictionFilter "PrimarySmtpAddress -eq 'hr@avaibe.com'" -ErrorAction Stop | Out-Null
+              Write-Host 'Created scope HR mailbox only'
+            } catch {
+              if ((Get-Date) -gt $deadline) { throw }
+              Write-Host ("{0:HH:mm:ss} Exchange not ready yet, retrying in 60s: {1}" -f (Get-Date), ($_.Exception.Message -split "`n")[0])
+              Start-Sleep -Seconds 60
+            }
+          }
+          Write-Host 'Scope HR mailbox only is present'
 
           $existing = Get-ManagementRoleAssignment -RoleAssignee $objId -Role 'Application Mail.Send' -ErrorAction SilentlyContinue
           if (-not $existing) {
