@@ -1,0 +1,45 @@
+name: Late clock-in reminder
+
+on:
+  schedule:
+    - cron: "40 3 * * 1-5"   # 09:10 IST, Mon–Fri  (India staff)
+    - cron: "10 5 * * 1-5"   # 09:10 UAE, Mon–Fri  (UAE staff)
+  workflow_dispatch:
+    inputs:
+      zone:
+        description: "Which staff to check"
+        type: choice
+        options: [IST, UAE]
+        default: IST
+      dry_run:
+        description: "Dry run – list who would be emailed, send nothing"
+        type: boolean
+        default: true
+      test_to:
+        description: "Send ONE sample email to this address only (leave empty for a normal run)"
+        type: string
+        default: ""
+
+permissions:
+  id-token: write      # GitHub OIDC -> Microsoft Entra, no stored secret
+  contents: read
+
+concurrency:
+  group: late-clockin-${{ github.event.inputs.zone || github.event.schedule }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Check clock-ins and send reminders
+        env:
+          ZONE: ${{ github.event_name == 'schedule' && (github.event.schedule == '40 3 * * 1-5' && 'IST' || 'UAE') || github.event.inputs.zone }}
+          DRY_RUN: ${{ github.event_name == 'schedule' && 'false' || github.event.inputs.dry_run }}
+          TEST_TO: ${{ github.event.inputs.test_to }}
+        run: node late-check.mjs
