@@ -63,6 +63,61 @@
   .good{color:var(--green);font-weight:600} .bad{color:var(--red);font-weight:600} .warnc{color:var(--amber);font-weight:600}
   .note{background:#eef2ff;color:#3730a3;border-radius:8px;padding:8px 12px;font-size:12px;margin:10px 0}
   .flags span{margin-right:4px}
+
+  /* HR corrections */
+  .hr-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px}
+  .hr-head h2{font-size:20px;margin:0 0 4px}
+  .hr-head p{margin:0;color:var(--muted);max-width:640px}
+  .hr-who{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 12px;font-size:13px}
+  .hr-who .k,.hr-entry .k,.sr .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+  .avatar{width:34px;height:34px;border-radius:50%;background:#eef2ff;color:#4338ca;font-weight:700;font-size:12px;display:grid;place-items:center;flex:none}
+  .avatar.sm{width:30px;height:30px;font-size:11px}
+  .hr-layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px;align-items:start}
+  .hr-card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px 22px;box-shadow:0 1px 2px rgba(16,24,40,.04),0 1px 3px rgba(16,24,40,.06)}
+  .hr-step{display:flex;gap:14px;padding:4px 0 18px}
+  .hr-step + .hr-step{border-top:1px solid var(--line);padding-top:18px}
+  .hr-step.dim{opacity:.5}
+  .hr-step .num{width:28px;height:28px;border-radius:50%;background:#4f46e5;color:#fff;font-weight:700;font-size:13px;display:grid;place-items:center;flex:none;margin-top:1px}
+  .hr-step.dim .num{background:#c7d2fe}
+  .hr-step .body{flex:1;min-width:0}
+  .hr-step h3{font-size:15px;margin:3px 0 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .fld label{display:block;font-size:12px;font-weight:600;color:#344054;margin-bottom:6px}
+  .inp{width:100%;height:42px;border:1px solid #d0d5dd;border-radius:10px;padding:0 12px;font:inherit;font-size:14px;background:#fff;color:var(--ink);transition:border-color .15s,box-shadow .15s}
+  .inp:hover:not(:disabled){border-color:#98a2b3}
+  .inp:focus{outline:none;border-color:#6366f1;box-shadow:0 0 0 4px rgba(99,102,241,.15)}
+  .inp:disabled{background:#f9fafb;cursor:not-allowed}
+  .inp.ta{height:auto;padding:10px 12px;resize:vertical;min-height:64px}
+  select.inp{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23667085' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:34px}
+  .hint{font-size:12px;color:var(--muted);margin-top:6px}
+  .tzchip{font-size:11px;font-weight:600;color:#4338ca;background:#eef2ff;border-radius:999px;padding:2px 10px}
+  .hr-empty{margin-top:14px;padding:14px;border:1px dashed #d0d5dd;border-radius:12px;color:var(--muted);text-align:center;font-size:13px;background:#fcfcfd}
+  .hr-entry{display:block;margin-top:14px;border:1px solid #e0e7ff;background:#f8f9ff;border-radius:12px;padding:12px 14px;cursor:pointer}
+  .hr-entry.none{border-color:#fde68a;background:#fffbeb;cursor:default}
+  .hr-entry-row{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
+  .hr-entry .v{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums}
+  .hr-entry .v.miss{color:var(--red);font-size:15px}
+  .hr-entry .arrow{color:#98a2b3;font-size:18px}
+  .hr-badge{margin-left:auto;font-size:11px;font-weight:700;border-radius:999px;padding:3px 10px;white-space:nowrap}
+  .hr-badge.upd{background:#dbeafe;color:#1d4ed8}
+  .hr-badge.new{background:#dcfce7;color:#15803d}
+  .hr-more{margin-top:12px}
+  .hr-more summary{cursor:pointer;color:#4f46e5;font-weight:600;font-size:13px;list-style:none;margin-bottom:10px}
+  .hr-more summary::-webkit-details-marker{display:none}
+  .hr-sum{position:sticky;top:84px}
+  .hr-sum h3{font-size:15px;margin:0 0 12px}
+  .hr-sum hr{border:none;border-top:1px solid var(--line);margin:10px 0}
+  .sr{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:5px 0;font-size:13px}
+  .sr s{text-decoration:line-through}
+  button.big{width:100%;height:44px;font-size:15px;font-weight:600;border-radius:10px;margin-top:16px}
+  button.primary:disabled{background:#c7d2fe;border-color:#c7d2fe;cursor:not-allowed}
+  .hr-alert{border-radius:12px;padding:12px 16px;margin-bottom:14px;font-weight:500}
+  .hr-alert.ok2{background:#ecfdf3;color:#027a48;border:1px solid #abefc6}
+  .hr-alert.err2{background:#fef3f2;color:#b42318;border:1px solid #fecdca}
+  .hr-recent{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px}
+  .hr-rc{display:flex;gap:12px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .small{font-size:12px}
+  @media (max-width:900px){.hr-layout{grid-template-columns:1fr}.hr-sum{position:static}.g2{grid-template-columns:1fr}.hr-head{flex-direction:column}}
   @media (max-width:900px){.charts{grid-template-columns:1fr}.tiles.k8{grid-template-columns:repeat(2,1fr)}}
   @media (max-width:800px){.tiles{grid-template-columns:repeat(2,1fr)} th:nth-child(5),td:nth-child(5){display:none}}
 </style>
@@ -785,37 +840,116 @@ function renderHR() {
   if (!isHR()) { el.innerHTML = '<div class="center"><p class="muted">HR corrections are only available to HR.</p></div>'; return; }
   if (!hr.staff) { el.innerHTML = '<div class="center"><p class="muted">Loading staff…</p></div>'; loadHRStaff(); return; }
   const ex = hr.existing, first = ex?.[0];
-  const etz = tzOf(hr.uid);
+  const etz = tzOf(hr.uid), tzL = TZ_LABEL[etz] || "";
   const t = x => x ? fmtTime(new Date(ms(x)), etz) : "";
   const pre = first ? { in: t(first.clockInEvent?.dateTime), out: t(first.clockOutEvent?.dateTime) } : { in: "", out: "" };
-  const recent = (state.audit || []).filter(a => a.issues.some(i => i.by === "hr")).slice(0, 10);
+  const recent = (state.audit || []).filter(a => a.issues.some(i => i.by === "hr")).slice(0, 8);
+  const ready = hr.uid && hr.day;
+  const initials = n => n.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join("").toUpperCase();
+  const dayTxt = hr.day ? fmtKey(hr.day, { weekday: "long", day: "numeric", month: "long" }) : "";
+
+  const entryBox = !ready ? `<div class="hr-empty">Choose an employee and a date to see what Shifts has recorded.</div>`
+    : hr.busy && !ex ? `<div class="hr-empty">Looking up ${esc(nameOf(hr.uid))}'s time card…</div>`
+    : ex && ex.length ? ex.map((c, n) => `
+        <label class="hr-entry">
+          <input type="radio" name="which" value="${n}" ${n ? "" : "checked"} ${ex.length < 2 ? "hidden" : ""}>
+          <div class="hr-entry-row">
+            <div><div class="k">Clock-in</div><div class="v">${t(c.clockInEvent?.dateTime) || "—"}</div></div>
+            <div class="arrow">→</div>
+            <div><div class="k">Clock-out</div><div class="v ${c.clockOutEvent?.dateTime ? "" : "miss"}">${t(c.clockOutEvent?.dateTime) || "Missing"}</div></div>
+            <div><div class="k">Breaks</div><div class="v">${(c.breaks || []).length}</div></div>
+            <span class="hr-badge upd">Will update</span>
+          </div>
+        </label>`).join("")
+    : `<div class="hr-entry none"><div class="hr-entry-row"><div><div class="k">Recorded</div><div class="v miss">Nothing for this day</div></div><span class="hr-badge new">Will create</span></div></div>`;
+
   el.innerHTML = `
-    <h2 class="sec" style="margin-top:0">HR corrections</h2>
-    <div class="note">Only use this for an <b>approved Missed clock-in request</b> from Teams Approvals. Every correction is saved under your name with the reason, and shows on the board as an HR correction. Staff must not edit their own time sheets.</div>
-    ${hr.err ? `<div class="err">${esc(hr.err)}</div>` : ""}${hr.msg ? `<div class="tile ok" style="margin-bottom:12px">✓ ${esc(hr.msg)}</div>` : ""}
-    <form id="hrForm" class="tile" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;align-items:end">
-      <label>Employee<br><select name="uid" style="width:100%;font:inherit;padding:6px;border:1px solid var(--line);border-radius:8px">
-        <option value="">Choose…</option>${hr.staff.map(s => `<option value="${s.id}" ${s.id === hr.uid ? "selected" : ""}>${esc(s.name)} (${TZ_LABEL[tzOf(s.id)]})</option>`).join("")}</select></label>
-      <label>Date<br><input type="date" name="day" max="${dubaiDateKey(new Date())}" value="${hr.day}" style="width:100%"></label>
-      <div style="grid-column:span 2" class="sub">${hr.busy ? "Working…" : !hr.uid || !hr.day ? "Pick an employee and date to see what's already recorded." :
-        ex && ex.length ? `Existing entr${ex.length > 1 ? "ies" : "y"}: ${ex.map((c, n) => `<label><input type="radio" name="which" value="${n}" ${n ? "" : "checked"}> in ${t(c.clockInEvent?.dateTime)} · out ${t(c.clockOutEvent?.dateTime) || "<b>missing</b>"} · ${(c.breaks || []).length} break(s)</label>`).join(" &nbsp; ")} – saving will <b>update</b> it.`
-        : "No entry recorded – saving will <b>create</b> one."}</div>
-      <div style="grid-column:span 4" class="sub">${hr.uid ? `Enter times in <b>${esc(nameOf(hr.uid))}'s local time (${TZ_LABEL[etz]})</b>.` : ""}</div>
-      <label>Clock-in<br><input type="time" name="inT" value="${pre.in}" style="width:100%"></label>
-      <label>Clock-out<br><input type="time" name="outT" value="${pre.out}" style="width:100%"></label>
-      <label>Add break start <span class="muted">(optional)</span><br><input type="time" name="bS" style="width:100%"></label>
-      <label>Add break end<br><input type="time" name="bE" style="width:100%"></label>
-      <label style="grid-column:span 3">Reason / approval reference<br><input name="reason" placeholder="e.g. Approved request 18 Nov – forgot to clock in, started 09:00" style="width:100%;font:inherit;padding:6px;border:1px solid var(--line);border-radius:8px"></label>
-      <button class="primary" ${hr.busy ? "disabled" : ""}>Save correction</button>
-    </form>
-    <h2 class="sec">Recent HR corrections</h2>
-    ${recent.length ? `<table><thead><tr><th>Staff</th><th>Day</th><th>Details</th></tr></thead><tbody>${recent.map(a => a.issues.filter(i => i.by === "hr").map(i =>
-      `<tr><td>${esc(a.name)}</td><td class="num">${fmtDay(a.day)}</td><td>${esc(i.detail)}</td></tr>`).join("")).join("")}</tbody></table>`
-      : '<p class="muted">None in the last 30 days.</p>'}`;
+    <div class="hr-head">
+      <div>
+        <h2>HR corrections</h2>
+        <p>Fix a missed clock-in, clock-out or break after a <b>Missed clock-in / clock-out</b> request is approved in Teams Approvals.</p>
+      </div>
+      <div class="hr-who"><span class="avatar sm">${esc(initials(me().name || me().username || "HR"))}</span><div><div class="k">Signed in as</div><div>${esc(me().name || me().username || "")}</div></div></div>
+    </div>
+    ${hr.err ? `<div class="hr-alert err2">⚠ ${esc(hr.err)}</div>` : ""}${hr.msg ? `<div class="hr-alert ok2">✓ ${esc(hr.msg)}</div>` : ""}
+    <div class="hr-layout">
+      <form id="hrForm" class="hr-card" novalidate>
+        <section class="hr-step">
+          <div class="num">1</div>
+          <div class="body">
+            <h3>Who and when</h3>
+            <div class="g2">
+              <div class="fld"><label>Employee</label>
+                <select class="inp" name="uid"><option value="">Select an employee…</option>
+                  ${hr.staff.map(s => `<option value="${s.id}" ${s.id === hr.uid ? "selected" : ""}>${esc(s.name)} · ${TZ_LABEL[tzOf(s.id)]}</option>`).join("")}</select></div>
+              <div class="fld"><label>Date</label><input class="inp" type="date" name="day" max="${dubaiDateKey(new Date())}" value="${hr.day}"></div>
+            </div>
+            ${entryBox}
+          </div>
+        </section>
+        <section class="hr-step ${ready ? "" : "dim"}">
+          <div class="num">2</div>
+          <div class="body">
+            <h3>Correct times ${ready ? `<span class="tzchip">${tzL} · ${esc(nameOf(hr.uid).split(" ")[0])}'s local time</span>` : ""}</h3>
+            <div class="g2">
+              <div class="fld"><label>Clock-in</label><input class="inp" type="time" name="inT" value="${pre.in}" ${ready ? "" : "disabled"}></div>
+              <div class="fld"><label>Clock-out</label><input class="inp" type="time" name="outT" value="${pre.out}" ${ready ? "" : "disabled"}></div>
+            </div>
+            <details class="hr-more" ${ready ? "" : "hidden"}><summary>+ Add a missed break</summary>
+              <div class="g2">
+                <div class="fld"><label>Break start</label><input class="inp" type="time" name="bS"></div>
+                <div class="fld"><label>Break end</label><input class="inp" type="time" name="bE"></div>
+              </div>
+            </details>
+          </div>
+        </section>
+        <section class="hr-step ${ready ? "" : "dim"}">
+          <div class="num">3</div>
+          <div class="body">
+            <h3>Reason</h3>
+            <div class="fld"><textarea class="inp ta" name="reason" rows="2" placeholder="e.g. Approved request 18 Nov – forgot to clock in, started 09:00" ${ready ? "" : "disabled"}></textarea>
+              <div class="hint">Saved on the time card and shown on the board next to the correction.</div></div>
+          </div>
+        </section>
+      </form>
+      <aside class="hr-card hr-sum">
+        <h3>Summary</h3>
+        <div id="hrSum"></div>
+        <button class="primary big" form="hrForm" ${hr.busy || !ready ? "disabled" : ""}>${hr.busy ? "Saving…" : "Save correction"}</button>
+        <p class="hint">Saved under your name. Staff can't see or use this screen.</p>
+      </aside>
+    </div>
+    <h2 class="sec">Recent HR corrections <span class="muted">· last 30 days</span></h2>
+    ${recent.length ? `<div class="hr-recent">${recent.map(a => a.issues.filter(i => i.by === "hr").map(i => `
+      <div class="hr-rc"><span class="avatar">${esc(initials(a.name))}</span>
+        <div><div><b>${esc(a.name)}</b> ${tzTag(a.tz)} <span class="muted">· ${fmtDay(a.day)}</span></div><div class="muted small">${esc(i.detail)}</div></div></div>`).join("")).join("")}</div>`
+      : '<div class="hr-empty">No HR corrections in the last 30 days.</div>'}`;
+
   const f = el.querySelector("#hrForm");
-  const fu = f.elements.namedItem("uid"), fd = f.elements.namedItem("day");
-  fu.onchange = () => { hr.uid = fu.value; loadExisting(); };
-  fd.onchange = () => { hr.day = fd.value; loadExisting(); };
+  const g = n => f.elements.namedItem(n);
+  const sum = () => {
+    const box = el.querySelector("#hrSum");
+    if (!ready) { box.innerHTML = '<p class="muted">Pick an employee and date to start.</p>'; return; }
+    const target = ex && ex.length ? ex[Number(g("which")?.value || 0)] : null;
+    const row = (k, from, to) => `<div class="sr"><span class="k">${k}</span><span>${from && from !== to ? `<s class="muted">${from}</s> → ` : ""}<b>${to || "—"}</b></span></div>`;
+    const inV = g("inT").value, outV = g("outT").value, bS = g("bS").value, bE = g("bE").value;
+    box.innerHTML = `
+      <div class="sr"><span class="k">Employee</span><span><b>${esc(nameOf(hr.uid))}</b> ${tzTag(etz)}</span></div>
+      <div class="sr"><span class="k">Day</span><span>${dayTxt}</span></div>
+      <div class="sr"><span class="k">Action</span><span class="hr-badge ${target ? "upd" : "new"}">${target ? "Update entry" : "Create entry"}</span></div>
+      <hr>
+      ${row("Clock-in", target ? t(target.clockInEvent?.dateTime) : "", inV)}
+      ${row("Clock-out", target ? (t(target.clockOutEvent?.dateTime) || "missing") : "", outV)}
+      ${bS || bE ? row("New break", "", (bS || "?") + "–" + (bE || "?")) : ""}
+      <div class="small muted" style="margin-top:6px">All times in ${tzL}.</div>`;
+  };
+  sum();
+  ["inT", "outT", "bS", "bE"].forEach(n => g(n)?.addEventListener("input", sum));
+  f.querySelectorAll('input[name="which"]').forEach(r => r.addEventListener("change", () => {
+    const c = ex[Number(r.value)]; g("inT").value = t(c.clockInEvent?.dateTime); g("outT").value = t(c.clockOutEvent?.dateTime); sum();
+  }));
+  g("uid").onchange = () => { hr.uid = g("uid").value; loadExisting(); };
+  g("day").onchange = () => { hr.day = g("day").value; loadExisting(); };
   f.onsubmit = ev => { ev.preventDefault(); saveCorrection(f); };
 }
 
