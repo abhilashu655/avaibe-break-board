@@ -1,0 +1,46 @@
+name: One-time - scope Mail.Send to HR mailbox
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Restrict app to hr@avaibe.com (Exchange RBAC for Applications)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Install-Module ExchangeOnlineManagement -Scope CurrentUser -Force
+          Import-Module ExchangeOnlineManagement
+          Write-Host ">>> Sign in with the device code below (as abhilash@avaibe.com)"
+          Connect-ExchangeOnline -Device -ShowBanner:$false
+
+          $appId = '55833e79-a769-4d81-897d-93824a9402f0'
+          $objId = '79a9b78f-187b-42f9-8e91-bc6353b7d55e'
+
+          if (-not (Get-ServicePrincipal -Identity $objId -ErrorAction SilentlyContinue)) {
+            New-ServicePrincipal -AppId $appId -ObjectId $objId -DisplayName 'Avaibe Live Break Board' | Out-Null
+            Write-Host 'Created Exchange service principal'
+          } else { Write-Host 'Exchange service principal already exists' }
+
+          if (-not (Get-ManagementScope -Identity 'HR mailbox only' -ErrorAction SilentlyContinue)) {
+            New-ManagementScope -Name 'HR mailbox only' -RecipientRestrictionFilter "PrimarySmtpAddress -eq 'hr@avaibe.com'" | Out-Null
+            Write-Host 'Created scope HR mailbox only'
+          } else { Write-Host 'Scope already exists' }
+
+          $existing = Get-ManagementRoleAssignment -RoleAssignee $objId -Role 'Application Mail.Send' -ErrorAction SilentlyContinue
+          if (-not $existing) {
+            New-ManagementRoleAssignment -App $appId -Role 'Application Mail.Send' -CustomResourceScope 'HR mailbox only' | Out-Null
+            Write-Host 'Created role assignment'
+          } else { Write-Host 'Role assignment already exists' }
+
+          Write-Host '--- Check: hr@avaibe.com (expect InScope True)'
+          Test-ServicePrincipalAuthorization -Identity $appId -Resource hr@avaibe.com | Format-Table RoleName,InScope -AutoSize | Out-String | Write-Host
+          Write-Host '--- Check: abhilash@avaibe.com (expect InScope False)'
+          Test-ServicePrincipalAuthorization -Identity $appId -Resource abhilash@avaibe.com | Format-Table RoleName,InScope -AutoSize | Out-String | Write-Host
+          Disconnect-ExchangeOnline -Confirm:$false
