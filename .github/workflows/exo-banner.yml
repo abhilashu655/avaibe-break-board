@@ -1,0 +1,56 @@
+name: One-time - External link warning banner and MailTips
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  banner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Add banner rule and enable MailTips
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Install-Module ExchangeOnlineManagement -Scope CurrentUser -Force
+          Import-Module ExchangeOnlineManagement
+          Write-Host ">>> Sign in with the device code below (as abhilash@avaibe.com)"
+          Connect-ExchangeOnline -Device -ShowBanner:$false
+
+          $html = @'
+          <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 12px 0;">
+          <tr><td style="background:#FFF4CE;border-left:5px solid #C19C00;padding:10px 12px;font-family:Segoe UI,Arial,sans-serif;font-size:13px;color:#3B2F00;">
+          <b>&#9888; External email with links.</b> This message is from outside Avaibe. Do not click links, open attachments or enter your password unless you know the sender and expected this email.
+          </td></tr></table>
+          '@
+
+          $name = 'Avaibe - External email link warning'
+          $params = @{
+            FromScope                         = 'NotInOrganization'
+            SentToScope                       = 'InOrganization'
+            SubjectOrBodyMatchesPatterns      = 'https?://'
+            ApplyHtmlDisclaimerLocation       = 'Prepend'
+            ApplyHtmlDisclaimerText           = $html
+            ApplyHtmlDisclaimerFallbackAction = 'Wrap'
+            Mode                              = 'Enforce'
+            Comments                          = 'Warning banner on external emails containing links. Created by Claude for Abhilash, 2026-11-27.'
+          }
+          if (Get-TransportRule -Identity $name -ErrorAction SilentlyContinue) {
+            Set-TransportRule -Identity $name @params
+            Write-Host 'Updated existing banner rule'
+          } else {
+            New-TransportRule -Name $name -Priority 0 @params | Out-Null
+            Write-Host 'Created banner rule'
+          }
+          Get-TransportRule -Identity $name | Format-List Name,State,Mode,Priority,FromScope,SentToScope,SubjectOrBodyMatchesPatterns,ApplyHtmlDisclaimerLocation | Out-String | Write-Host
+
+          Write-Host '--- MailTips before'
+          Get-OrganizationConfig | Format-List MailTipsAllTipsEnabled,MailTipsExternalRecipientsTipsEnabled,MailTipsGroupMetricsEnabled,MailTipsLargeAudienceThreshold | Out-String | Write-Host
+          Set-OrganizationConfig -MailTipsAllTipsEnabled $true -MailTipsExternalRecipientsTipsEnabled $true -MailTipsGroupMetricsEnabled $true -MailTipsLargeAudienceThreshold 25
+          Write-Host '--- MailTips after'
+          Get-OrganizationConfig | Format-List MailTipsAllTipsEnabled,MailTipsExternalRecipientsTipsEnabled,MailTipsGroupMetricsEnabled,MailTipsLargeAudienceThreshold | Out-String | Write-Host
+
+          Disconnect-ExchangeOnline -Confirm:$false
